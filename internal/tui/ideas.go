@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"oc-manager/internal/model"
+	"github.com/local/oc-manager/internal/model"
 )
 
 // Messages

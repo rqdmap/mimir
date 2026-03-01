@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"oc-manager/internal/model"
+	"github.com/local/oc-manager/internal/model"
 )
 
 func TestIdeasViewEmpty(t *testing.T) {
@@ -44,8 +44,7 @@ func TestIdeasViewWithData(t *testing.T) {
 
 	// Send 'j' to move down
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}
-	model, _ := v.Update(msg)
-	v = model.(IdeasView)
+	v, _ = v.Update(msg)
 
 	if v.list.Index() != 1 {
 		t.Errorf("expected index 1 after 'j', got %d", v.list.Index())
@@ -53,8 +52,7 @@ func TestIdeasViewWithData(t *testing.T) {
 
 	// Send 'k' to move up
 	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")}
-	model, _ = v.Update(msg)
-	v = model.(IdeasView)
+	v, _ = v.Update(msg)
 
 	if v.list.Index() != 0 {
 		t.Errorf("expected index 0 after 'k', got %d", v.list.Index())
@@ -70,8 +68,7 @@ func TestIdeasViewDelete(t *testing.T) {
 
 	// Send 'd'
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}
-	model, _ := v.Update(msg)
-	v = model.(IdeasView)
+	v, _ = v.Update(msg)
 
 	if !v.confirmDel {
 		t.Error("expected confirmDel to be true after 'd'")
@@ -82,8 +79,7 @@ func TestIdeasViewDelete(t *testing.T) {
 
 	// Send 'n' to cancel
 	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}
-	model, _ = v.Update(msg)
-	v = model.(IdeasView)
+	v, _ = v.Update(msg)
 
 	if v.confirmDel {
 		t.Error("expected confirmDel to be false after 'n'")
@@ -91,13 +87,12 @@ func TestIdeasViewDelete(t *testing.T) {
 
 	// Send 'd' again
 	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")}
-	model, _ = v.Update(msg)
-	v = model.(IdeasView)
+	v, _ = v.Update(msg)
 
 	// Send 'y' to confirm
 	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")}
-	updatedModel, cmd := v.Update(msg)
-	v = updatedModel.(IdeasView)
+	var cmd tea.Cmd
+	v, cmd = v.Update(msg)
 
 	if v.confirmDel {
 		t.Error("expected confirmDel to be false after 'y'")
