@@ -2,6 +2,7 @@ package tui
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -68,6 +69,10 @@ type App struct {
 
 	inputMode InputMode
 	tagFilter TagFilterView
+
+	searchMode  bool
+	searchQuery string
+
 
 	showHelp bool
 }
@@ -360,6 +365,35 @@ func (a App) View() string {
 func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Search mode — intercept all keys
+	if a.searchMode {
+		switch key {
+		case "esc":
+			a.searchMode = false
+			a.searchQuery = ""
+			a.sessionList.SetSessions(a.sessions, a.sessionTags)
+			return a, nil
+		case "backspace":
+			if len(a.searchQuery) > 0 {
+				a.searchQuery = a.searchQuery[:len(a.searchQuery)-1]
+			}
+		default:
+			if len(key) == 1 { // printable character
+				a.searchQuery += key
+			}
+		}
+		// Apply filter
+		filtered := filterSessionsByTitle(a.sessions, a.searchQuery)
+		filteredTags := make(map[string][]string)
+		for _, s := range filtered {
+			if t, ok := a.sessionTags[s.ID]; ok {
+				filteredTags[s.ID] = t
+			}
+		}
+		a.sessionList.SetSessions(filtered, filteredTags)
+		return a, nil
+	}
+
 	// If in Ideas view, delegate there
 	if a.state == StateIdeas {
 		var cmd tea.Cmd
@@ -398,6 +432,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.tagFilter.SetTags(tags)
 		}
 		a.tagFilter.Activate()
+		return a, nil
+
+	case KeySearch:
+		a.searchMode = true
+		a.searchQuery = ""
 		return a, nil
 
 	case "tab":
@@ -552,6 +591,9 @@ func (a App) loadSession(sess model.Session) tea.Cmd {
 	opencodeDB := a.opencodeDB
 	managerDB := a.managerDB
 	return func() tea.Msg {
+		if opencodeDB == nil {
+			return errMsg{err: "opencode.db not available"}
+		}
 		msgs, err := db.LoadSessionMessages(opencodeDB, sess.ID)
 		if err != nil {
 			return errMsg{err: err.Error()}
@@ -602,6 +644,9 @@ func (a App) reloadSessionTagsAndList(sessionID string) tea.Cmd {
 		if managerDB == nil {
 			return nil
 		}
+		if opencodeDB == nil {
+			return errMsg{err: "opencode.db not available"}
+		}
 		sessions, err := db.ListSessions(opencodeDB)
 		if err != nil {
 			return errMsg{err: err.Error()}
@@ -636,6 +681,21 @@ func filterSessionsByIDs(sessions []model.Session, ids []string) []model.Session
 	return out
 }
 
+// filterSessionsByTitle returns sessions whose title contains query (case-insensitive).
+func filterSessionsByTitle(sessions []model.Session, query string) []model.Session {
+	if query == "" {
+		return sessions
+	}
+	q := strings.ToLower(query)
+	var out []model.Session
+	for _, s := range sessions {
+		if strings.Contains(strings.ToLower(s.Title), q) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // --- Additional async message types for metadata refresh ---
 
 type sessionMetaRefreshedMsg struct {
@@ -652,6 +712,11 @@ type sessionAndListRefreshedMsg struct {
 // --- View helpers ---
 
 func (a App) buildStatusBar() string {
+	if a.searchMode {
+		searchBar := fmt.Sprintf("Search: %s_  │  Searching titles only  │  [Esc] cancel", a.searchQuery)
+		return StatusBarStyle.Render(searchBar)
+	}
+
 	var parts []string
 
 	// Focus hint
@@ -681,6 +746,12 @@ func (a App) overlayHelp(background string) string {
 	helpText := `Keybindings
 
   [Tab / Shift+Tab]  Cycle pane focus
+  [r]               Refresh sessions
+  [/]               Search sessions (title only)
+  [I]               Open Idea Notebook
+  [T]               Filter by tag
+  [?]               Toggle this help
+  [q / Ctrl+C]      Quit
   [r]               Refresh sessions
   [I]               Open Idea Notebook
   [T]               Filter by tag

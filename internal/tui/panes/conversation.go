@@ -24,7 +24,7 @@ type ConversationPane struct {
 // NewConversationPane creates a new ConversationPane with given dimensions.
 func NewConversationPane(width, height int) ConversationPane {
 	vp := viewport.New(width-2, height-4) // account for border + title row
-	vp.SetContent("Select a session to view the conversation.")
+	vp.SetContent("Select a session from the list to view the conversation.")
 	return ConversationPane{
 		viewport: vp,
 		messages: nil,
@@ -145,7 +145,7 @@ func renderRoleHeader(role string) string {
 // renderContent builds the full conversation string from all messages.
 func (c *ConversationPane) renderContent() string {
 	if len(c.messages) == 0 {
-		return "Select a session to view the conversation."
+		return "Select a session from the list to view the conversation."
 	}
 
 	var sb strings.Builder

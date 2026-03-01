@@ -246,7 +246,7 @@ func (v IdeasView) View() string {
 }
 
 func (v IdeasView) viewEmpty() string {
-	msg := "No ideas yet.\n\nPress 'i' in any session to capture an idea.\n\n[q/Esc] Back to sessions"
+	msg := "No ideas yet.\n\nPress i on any session to capture an idea.\n\n[q/Esc] Back to sessions"
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
