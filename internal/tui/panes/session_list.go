@@ -47,6 +47,7 @@ func (i SessionItem) FilterValue() string { return i.Session.Title }
 type SessionList struct {
 	list    list.Model
 	focused bool
+	loading bool
 	Width   int
 	Height  int
 }
@@ -69,6 +70,7 @@ func NewSessionList(width, height int) SessionList {
 	s := SessionList{
 		list:    l,
 		focused: false,
+		loading: true,
 		Width:   width,
 		Height:  height,
 	}
@@ -78,8 +80,9 @@ func NewSessionList(width, height int) SessionList {
 	return s
 }
 
-// SetSessions updates the displayed sessions
+// SetSessions updates the displayed sessions and clears the loading state.
 func (s *SessionList) SetSessions(sessions []model.Session, tags map[string][]string) {
+	s.loading = false // loading done once sessions are provided
 	items := make([]list.Item, len(sessions))
 	for i, sess := range sessions {
 		t := []string{}
@@ -98,6 +101,11 @@ func (s *SessionList) SetSessions(sessions []model.Session, tags map[string][]st
 // SetFocused controls whether this pane has focus (styling)
 func (s *SessionList) SetFocused(focused bool) {
 	s.focused = focused
+}
+
+// SetLoading controls the loading indicator state
+func (s *SessionList) SetLoading(loading bool) {
+	s.loading = loading
 }
 
 // SetSize updates pane dimensions
@@ -128,6 +136,16 @@ func (s *SessionList) SelectedSession() *model.Session {
 		return &sessionItem.Session
 	}
 	return nil
+}
+
+// SelectByID scrolls the list to the first session with the given ID.
+func (s *SessionList) SelectByID(id string) {
+	for i, item := range s.list.Items() {
+		if si, ok := item.(SessionItem); ok && si.Session.ID == id {
+			s.list.Select(i)
+			return
+		}
+	}
 }
 
 // Init satisfies tea.Model
@@ -176,6 +194,10 @@ func (s SessionList) View() string {
 		BorderForeground(borderColor).
 		Width(s.Width - 2).
 		Height(s.Height - 2)
+
+	if s.loading {
+		return style.Render("⟳  Loading sessions...")
+	}
 
 	if len(s.list.Items()) == 0 {
 		return style.Render("No sessions found.\nStart a conversation in OpenCode to see it here.")

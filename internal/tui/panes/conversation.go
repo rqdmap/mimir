@@ -11,27 +11,45 @@ import (
 	"github.com/local/oc-manager/internal/model"
 )
 
-// ConversationPane is the center panel displaying a session's full chat history.
-type ConversationPane struct {
-	viewport viewport.Model
-	messages []model.Message
-	focused  bool
-	width    int
-	height   int
-	ready    bool
+// ConvRendererReadyMsg is delivered when the glamour renderer is built asynchronously.
+type ConvRendererReadyMsg struct {
+	Renderer *glamour.TermRenderer
+	Width    int
 }
 
-// NewConversationPane creates a new ConversationPane with given dimensions.
+func newConvRendererCmd(width int) tea.Cmd {
+	return func() tea.Msg {
+		r, _ := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+		)
+		return ConvRendererReadyMsg{Renderer: r, Width: width}
+	}
+}
+
+// ConversationPane is the center panel displaying a session's full chat history.
+type ConversationPane struct {
+	viewport       viewport.Model
+	messages       []model.Message
+	focused        bool
+	width          int
+	height         int
+	ready          bool
+	ideaMode       bool
+	renderer       *glamour.TermRenderer
+	rendererWidth  int
+}
+
 func NewConversationPane(width, height int) ConversationPane {
-	vp := viewport.New(width-2, height-4) // account for border + title row
+	vp := viewport.New(width-2, height-4)
 	vp.SetContent("Select a session from the list to view the conversation.")
 	return ConversationPane{
-		viewport: vp,
-		messages: nil,
-		focused:  false,
-		width:    width,
-		height:   height,
-		ready:    true,
+		viewport:      vp,
+		messages:      nil,
+		focused:       false,
+		width:         width,
+		height:        height,
+		ready:         true,
 	}
 }
 
@@ -48,11 +66,33 @@ func (c *ConversationPane) SetFocused(focused bool) {
 }
 
 // SetSize updates the pane dimensions.
-func (c *ConversationPane) SetSize(width, height int) {
+func (c *ConversationPane) SetSize(width, height int) tea.Cmd {
 	c.width = width
 	c.height = height
 	c.viewport.Width = width - 2
 	c.viewport.Height = height - 4
+	inner := width - 2 - 4
+	if inner <= 0 {
+		inner = 80
+	}
+	if inner != c.rendererWidth {
+		return newConvRendererCmd(inner)
+	}
+	return nil
+}
+
+// SetIdeaContent sets idea mode and renders markdown content to the viewport.
+func (c *ConversationPane) SetIdeaContent(content string) {
+	c.ideaMode = true
+	rendered := renderMarkdownCached(c.renderer, content)
+	c.viewport.SetContent(rendered)
+	c.viewport.GotoTop()
+}
+
+// ClearIdeaContent clears idea mode and empties the viewport.
+func (c *ConversationPane) ClearIdeaContent() {
+	c.ideaMode = false
+	c.viewport.SetContent("")
 }
 
 // Init satisfies tea.Model.
@@ -63,6 +103,11 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case ConvRendererReadyMsg:
+		c.renderer = msg.Renderer
+		c.rendererWidth = msg.Width
+		c.viewport.SetContent(c.renderContent())
+		return c, nil
 	case tea.KeyMsg:
 		if !c.focused {
 			return c, nil
@@ -78,8 +123,8 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 			c.viewport.HalfViewUp()
 		}
 	case tea.WindowSizeMsg:
-		c.SetSize(msg.Width, msg.Height)
-		return c, nil
+		cmd := c.SetSize(msg.Width, msg.Height)
+		return c, cmd
 	}
 
 	c.viewport, cmd = c.viewport.Update(msg)
@@ -112,7 +157,6 @@ func (c ConversationPane) View() string {
 func renderMarkdown(text string, width int) (result string) {
 	defer func() {
 		if r := recover(); r != nil {
-			// glamour panicked — return plain text
 			result = text
 		}
 	}()
@@ -126,6 +170,23 @@ func renderMarkdown(text string, width int) (result string) {
 	if err != nil {
 		return text
 	}
+	out, err := r.Render(text)
+	if err != nil {
+		return text
+	}
+	return out
+}
+
+// renderMarkdownCached renders text as markdown using a pre-built glamour renderer.
+func renderMarkdownCached(r *glamour.TermRenderer, text string) (result string) {
+	if r == nil {
+		return text
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			result = text
+		}
+	}()
 	out, err := r.Render(text)
 	if err != nil {
 		return text
@@ -160,7 +221,7 @@ func (c *ConversationPane) renderContent() string {
 			switch part.Type {
 			case model.PartTypeText:
 				// Use glamour with recovery; fall back to plain text
-				rendered := renderMarkdown(part.Text, c.viewport.Width-4)
+				rendered := renderMarkdownCached(c.renderer, part.Text)
 				sb.WriteString(rendered)
 				hasRenderable = true
 

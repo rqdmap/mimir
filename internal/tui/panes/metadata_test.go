@@ -28,7 +28,6 @@ func TestMetadataPaneWithData(t *testing.T) {
 		Note:      "This is my test note",
 		Tags:      []string{"important", "work"},
 	})
-	mp.SetIdeaCount(3)
 	mp.SetMessageCount(42)
 
 	view := mp.View()
@@ -38,8 +37,8 @@ func TestMetadataPaneWithData(t *testing.T) {
 	if !strings.Contains(view, "work") {
 		t.Errorf("expected tag 'work' in view, got: %s", view)
 	}
-	if !strings.Contains(view, "This is my test note") {
-		t.Errorf("expected note 'This is my test note' in view, got: %s", view)
+	if !strings.Contains(view, "Session Ideas") {
+		t.Errorf("expected 'Session Ideas' section in view, got: %s", view)
 	}
 	if !strings.Contains(view, "Messages: 42") {
 		t.Logf("message count may be styled away or format diff, view: %s", view)
