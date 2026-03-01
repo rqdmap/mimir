@@ -17,15 +17,27 @@ type ExitIdeasMsg struct{}
 type EditIdeaMsg struct{ ID string }
 type DeleteIdeaConfirmedMsg struct{ ID string }
 
+// ideaRendererReadyMsg is emitted when the glamour renderer is ready (async).
+type ideaRendererReadyMsg struct {
+	renderer      *glamour.TermRenderer
+	rendererWidth int
+}
+
+// IdeaSessionRequestMsg asks the app to load the linked session into the conversation pane.
+type IdeaSessionRequestMsg struct{ SessionID string }
+
+// ideaPreviewRenderedMsg carries the glamour-rendered preview text.
+type ideaPreviewRenderedMsg struct{ content string }
 type IdeasView struct {
-	ideas        []model.Idea
-	list         list.Model
-	preview      viewport.Model
-	width        int
-	height       int
-	confirmDel   bool
-	deleteTarget string
-	renderer     *glamour.TermRenderer
+	ideas         []model.Idea
+	list          list.Model
+	preview       viewport.Model
+	width         int
+	height        int
+	confirmDel    bool
+	deleteTarget  string
+	renderer      *glamour.TermRenderer
+	rendererWidth int
 }
 
 type IdeaItem struct {
@@ -51,6 +63,17 @@ func (i IdeaItem) Description() string {
 
 func (i IdeaItem) FilterValue() string { return i.Idea.Content }
 
+// newRendererCmd creates a glamour renderer asynchronously so the UI thread is never blocked.
+func newRendererCmd(width int) tea.Cmd {
+	return func() tea.Msg {
+		r, _ := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+		)
+		return ideaRendererReadyMsg{renderer: r, rendererWidth: width}
+	}
+}
+
 func NewIdeasView(width, height int) IdeasView {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Idea Notebook"
@@ -65,34 +88,28 @@ func NewIdeasView(width, height int) IdeasView {
 
 	vp := viewport.New(0, 0)
 
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(0),
-	)
-
 	v := IdeasView{
-		list:     l,
-		preview:  vp,
-		width:    width,
-		height:   height,
-		renderer: r,
+		list:    l,
+		preview: vp,
+		width:   width,
+		height:  height,
 	}
-	// Initial sizing
+	// Initial sizing — renderer will be created asynchronously on first WindowSizeMsg.
 	v.SetSize(width, height)
 	return v
 }
 
-func (v *IdeasView) SetIdeas(ideas []model.Idea) {
+func (v *IdeasView) SetIdeas(ideas []model.Idea) tea.Cmd {
 	v.ideas = ideas
 	items := make([]list.Item, len(ideas))
 	for i, idea := range ideas {
 		items[i] = IdeaItem{Idea: idea}
 	}
 	v.list.SetItems(items)
-	v.updatePreview()
+	return v.renderPreviewCmd()
 }
 
-func (v *IdeasView) SetSize(width, height int) {
+func (v *IdeasView) SetSize(width, height int) tea.Cmd {
 	v.width = width
 	v.height = height
 
@@ -106,13 +123,21 @@ func (v *IdeasView) SetSize(width, height int) {
 	v.preview.Width = previewWidth
 	v.preview.Height = height - 2
 
-	if v.renderer != nil {
-		v.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(previewWidth),
-		)
+	// Only recreate renderer when preview width changes — do it asynchronously.
+	if previewWidth > 0 && previewWidth != v.rendererWidth {
+		return newRendererCmd(previewWidth)
 	}
-	v.updatePreview()
+	return v.renderPreviewCmd()
+}
+
+// SelectedIdea returns the currently highlighted idea, or nil if none.
+func (v *IdeasView) SelectedIdea() *model.Idea {
+	sel, ok := v.list.SelectedItem().(IdeaItem)
+	if !ok {
+		return nil
+	}
+	idea := sel.Idea
+	return &idea
 }
 
 func (v IdeasView) Init() tea.Cmd {
@@ -125,7 +150,16 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		v.SetSize(msg.Width, msg.Height)
+		cmds = append(cmds, v.SetSize(msg.Width, msg.Height))
+
+	case ideaRendererReadyMsg:
+		v.renderer = msg.renderer
+		v.rendererWidth = msg.rendererWidth
+		return v, v.renderPreviewCmd()
+
+	case ideaPreviewRenderedMsg:
+		v.preview.SetContent(msg.content)
+		return v, nil
 
 	case tea.KeyMsg:
 		// Handle Delete Confirmation
@@ -149,9 +183,7 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 		// Normal Navigation
 		switch msg.String() {
 		case "esc", "q":
-			if v.list.FilterState() != list.Filtering {
-				return v, func() tea.Msg { return ExitIdeasMsg{} }
-			}
+			// Ideas is now a tab — no-op here; use [ to switch to Sessions tab
 		case "e":
 			if v.list.FilterState() != list.Filtering {
 				if sel, ok := v.list.SelectedItem().(IdeaItem); ok {
@@ -170,18 +202,17 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 	}
 
 	// Update List
-	// We only update list if we are not confirming delete,
-	// BUT we also need to allow filtering input if filter is active.
-	// Since we trapped keys above for confirmDel, it's safe.
-	// We trapped keys for d/e/q/esc above, but only if not filtering (for some).
-	// Let bubbles/list handle the rest.
-
 	prevSel := v.list.Index()
 	v.list, cmd = v.list.Update(msg)
 	cmds = append(cmds, cmd)
 
 	if v.list.Index() != prevSel {
-		v.updatePreview()
+		cmds = append(cmds, v.renderPreviewCmd())
+		// Feature 5: auto-load linked session in conversation pane on navigation.
+		if sel, ok := v.list.SelectedItem().(IdeaItem); ok && sel.Idea.SourceSessionID != "" {
+			sid := sel.Idea.SourceSessionID
+			cmds = append(cmds, func() tea.Msg { return IdeaSessionRequestMsg{SessionID: sid} })
+		}
 	}
 
 	// Update Preview (viewport)
@@ -191,27 +222,33 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 	return v, tea.Batch(cmds...)
 }
 
-func (v *IdeasView) updatePreview() {
+// renderPreviewCmd returns a tea.Cmd that renders the selected idea's preview
+// in a background goroutine (avoids blocking the UI thread with glamour).
+func (v *IdeasView) renderPreviewCmd() tea.Cmd {
 	if len(v.ideas) == 0 {
 		v.preview.SetContent("")
-		return
+		return nil
 	}
 
 	sel := v.list.SelectedItem()
 	if sel == nil {
 		v.preview.SetContent("")
-		return
+		return nil
 	}
 
-	idea := sel.(IdeaItem).Idea
-	content := idea.Content
+	content := sel.(IdeaItem).Idea.Content
+	renderer := v.renderer // capture for goroutine
 
-	rendered, err := v.renderer.Render(content)
-	if err != nil {
-		rendered = content
+	return func() tea.Msg {
+		if renderer == nil {
+			return ideaPreviewRenderedMsg{content: content}
+		}
+		rendered, err := renderer.Render(content)
+		if err != nil {
+			rendered = content
+		}
+		return ideaPreviewRenderedMsg{content: rendered}
 	}
-
-	v.preview.SetContent(rendered)
 }
 
 func (v IdeasView) View() string {
