@@ -63,6 +63,43 @@ func ListSessions(db *sql.DB) ([]model.Session, error) {
 	return sessions, nil
 }
 
+// ListSessionsPage returns up to limit sessions starting at offset, newest first.
+func ListSessionsPage(db *sql.DB, limit, offset int) ([]model.Session, error) {
+	const query = `
+		SELECT id, title, slug, directory, COALESCE(parent_id, ''), time_created, time_updated
+		FROM session
+		WHERE time_archived IS NULL
+		ORDER BY time_updated DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := db.Query(query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("query sessions page: %w", err)
+	}
+	defer rows.Close()
+	var sessions []model.Session
+	for rows.Next() {
+		var s model.Session
+		if err := rows.Scan(&s.ID, &s.Title, &s.Slug, &s.Directory, &s.ParentID, &s.TimeCreated, &s.TimeUpdated); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return sessions, nil
+}
+
+func CountSessions(db *sql.DB) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM session WHERE time_archived IS NULL`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count sessions: %w", err)
+	}
+	return n, err
+}
+
 // messageData is the JSON structure stored in message.data
 type messageData struct {
 	Role string `json:"role"`
@@ -118,41 +155,42 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		return nil, fmt.Errorf("message rows error: %w", err)
 	}
 
-	// Load parts for each message
-	const partQuery = `
-		SELECT id, data
+	// Load ALL parts for this session in ONE query
+	const batchPartQuery = `
+		SELECT id, message_id, data
 		FROM part
-		WHERE message_id = ?
+		WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)
 		ORDER BY time_created ASC
 	`
+	partRows, err := db.Query(batchPartQuery, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query parts: %w", err)
+	}
+	defer partRows.Close()
+
+	partsByMsg := make(map[string][]model.Part)
+	for partRows.Next() {
+		var (
+			partID   string
+			msgID    string
+			dataJSON string
+		)
+		if err := partRows.Scan(&partID, &msgID, &dataJSON); err != nil {
+			return nil, fmt.Errorf("scan part: %w", err)
+		}
+
+		part := parsePart(partID, dataJSON)
+		if part != nil {
+			partsByMsg[msgID] = append(partsByMsg[msgID], *part)
+		}
+	}
+	if err := partRows.Err(); err != nil {
+		return nil, fmt.Errorf("part rows error: %w", err)
+	}
+
+	// Assign parts to messages
 	for i := range messages {
-		partRows, err := db.Query(partQuery, messages[i].ID)
-		if err != nil {
-			return nil, fmt.Errorf("query parts for message %s: %w", messages[i].ID, err)
-		}
-
-		var parts []model.Part
-		for partRows.Next() {
-			var (
-				partID   string
-				dataJSON string
-			)
-			if err := partRows.Scan(&partID, &dataJSON); err != nil {
-				partRows.Close()
-				return nil, fmt.Errorf("scan part: %w", err)
-			}
-
-			part := parsePart(partID, dataJSON)
-			if part != nil {
-				parts = append(parts, *part)
-			}
-		}
-		partRows.Close()
-		if err := partRows.Err(); err != nil {
-			return nil, fmt.Errorf("part rows error: %w", err)
-		}
-
-		messages[i].Parts = parts
+		messages[i].Parts = partsByMsg[messages[i].ID]
 	}
 
 	return messages, nil
