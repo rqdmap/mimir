@@ -1,10 +1,12 @@
 package db_test
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 
 	"github.com/local/oc-manager/internal/db"
+	_ "modernc.org/sqlite"
 )
 
 func TestOpenManagerDB(t *testing.T) {
@@ -115,4 +117,115 @@ func TestManagerDB(t *testing.T) {
 		t.Fatalf("delete idea: %v", err)
 	}
 	t.Log("manager DB full round-trip PASS")
+}
+
+func newInMemoryDB(t *testing.T) *sql.DB {
+	t.Helper()
+	memDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := db.RunSchema(memDB); err != nil {
+		t.Fatalf("run schema: %v", err)
+	}
+	t.Cleanup(func() { memDB.Close() })
+	return memDB
+}
+
+func TestRunMigrations(t *testing.T) {
+	memDB := newInMemoryDB(t)
+
+	// Insert a session_meta row with a note
+	_, err := memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, ?, ?)`,
+		"session-migrate-1", "my note", 1700000000)
+	if err != nil {
+		t.Fatalf("insert session_meta: %v", err)
+	}
+
+	// Run migrations
+	if err := db.RunMigrations(memDB); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	// Assert idea row was created
+	var count int
+	err = memDB.QueryRow(`SELECT COUNT(*) FROM idea WHERE source_session_id = ?`, "session-migrate-1").Scan(&count)
+	if err != nil {
+		t.Fatalf("count ideas: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 idea, got %d", count)
+	}
+
+	// Assert note was NULLed
+	var note *string
+	err = memDB.QueryRow(`SELECT note FROM session_meta WHERE session_id = ?`, "session-migrate-1").Scan(&note)
+	if err != nil {
+		t.Fatalf("scan note: %v", err)
+	}
+	if note != nil {
+		t.Fatalf("expected note to be NULL, got %q", *note)
+	}
+	t.Log("TestRunMigrations PASS")
+}
+
+func TestRunMigrationsIdempotent(t *testing.T) {
+	memDB := newInMemoryDB(t)
+
+	// Insert a session_meta row with a note
+	_, err := memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, ?, ?)`,
+		"session-migrate-2", "idempotent note", 1700000001)
+	if err != nil {
+		t.Fatalf("insert session_meta: %v", err)
+	}
+
+	// Run migrations twice
+	if err := db.RunMigrations(memDB); err != nil {
+		t.Fatalf("RunMigrations first: %v", err)
+	}
+	if err := db.RunMigrations(memDB); err != nil {
+		t.Fatalf("RunMigrations second: %v", err)
+	}
+
+	// Assert idea count = 1 (not doubled)
+	var count int
+	err = memDB.QueryRow(`SELECT COUNT(*) FROM idea WHERE source_session_id = ?`, "session-migrate-2").Scan(&count)
+	if err != nil {
+		t.Fatalf("count ideas: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 idea after idempotent run, got %d", count)
+	}
+	t.Log("TestRunMigrationsIdempotent PASS")
+}
+
+func TestGetIdeasForSession(t *testing.T) {
+	memDB := newInMemoryDB(t)
+
+	// Insert an idea with source_session_id
+	now := int64(1700000000000)
+	_, err := memDB.Exec(`INSERT INTO idea (id, content, source_session_id, time_created, time_updated) VALUES (?, ?, ?, ?, ?)`,
+		"idea-test-1", "test content", "session-xyz", now, now)
+	if err != nil {
+		t.Fatalf("insert idea: %v", err)
+	}
+
+	// Call GetIdeasForSession
+	ideas, err := db.GetIdeasForSession(memDB, "session-xyz")
+	if err != nil {
+		t.Fatalf("GetIdeasForSession: %v", err)
+	}
+	if len(ideas) != 1 {
+		t.Fatalf("expected 1 idea, got %d", len(ideas))
+	}
+	if ideas[0].ID != "idea-test-1" {
+		t.Fatalf("wrong idea ID: %q", ideas[0].ID)
+	}
+	if ideas[0].Content != "test content" {
+		t.Fatalf("wrong content: %q", ideas[0].Content)
+	}
+	if ideas[0].SourceSessionID != "session-xyz" {
+		t.Fatalf("wrong source session: %q", ideas[0].SourceSessionID)
+	}
+	t.Log("TestGetIdeasForSession PASS")
 }

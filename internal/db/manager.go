@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/local/oc-manager/internal/model"
@@ -61,10 +62,16 @@ func runManagerSchema(db *sql.DB) error {
 			tag_name TEXT NOT NULL,
 			PRIMARY KEY (idea_id, tag_name)
 		)`,
+		`CREATE TABLE IF NOT EXISTS idea_tag (
+			idea_id  TEXT NOT NULL,
+			tag_name TEXT NOT NULL,
+			PRIMARY KEY (idea_id, tag_name)
+		)`,
 		`CREATE TABLE IF NOT EXISTS tag (
 			name  TEXT PRIMARY KEY,
 			color TEXT NOT NULL DEFAULT '#7D56F4'
 		)`,
+		`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -72,6 +79,11 @@ func runManagerSchema(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// RunSchema is an exported wrapper around runManagerSchema for use in tests.
+func RunSchema(db *sql.DB) error {
+	return runManagerSchema(db)
 }
 
 func min(a, b int) int {
@@ -193,6 +205,29 @@ func GetSessionTags(db *sql.DB, sessionID string) ([]string, error) {
 	return tags, rows.Err()
 }
 
+// ListAllSessionTags returns ALL session tags in ONE query as map[sessionID][]tagName.
+// Use this instead of calling GetSessionTags per-session to avoid N+1 queries.
+func ListAllSessionTags(db *sql.DB) (map[string][]string, error) {
+	if db == nil {
+		return make(map[string][]string), nil
+	}
+	rows, err := db.Query(`SELECT session_id, tag_name FROM session_tag ORDER BY session_id, tag_name`)
+	if err != nil {
+		return nil, fmt.Errorf("query all session_tag: %w", err)
+	}
+	defer rows.Close()
+
+	tags := make(map[string][]string)
+	for rows.Next() {
+		var sessionID, tagName string
+		if err := rows.Scan(&sessionID, &tagName); err != nil {
+			return nil, fmt.Errorf("scan session_tag: %w", err)
+		}
+		tags[sessionID] = append(tags[sessionID], tagName)
+	}
+	return tags, rows.Err()
+}
+
 // ListAllTags returns all tags from the tag table.
 func ListAllTags(db *sql.DB) ([]model.Tag, error) {
 	rows, err := db.Query(`SELECT name, color FROM tag ORDER BY name`)
@@ -269,6 +304,7 @@ func ListIdeas(db *sql.DB) ([]model.Idea, error) {
 	defer rows.Close()
 
 	var ideas []model.Idea
+	var ideaIDs []string
 	for rows.Next() {
 		var idea model.Idea
 		var sourceID sql.NullString
@@ -277,18 +313,46 @@ func ListIdeas(db *sql.DB) ([]model.Idea, error) {
 		}
 		idea.SourceSessionID = sourceID.String
 		ideas = append(ideas, idea)
+		ideaIDs = append(ideaIDs, idea.ID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Fetch tags for each idea.
-	for i := range ideas {
-		tags, err := getIdeaTags(db, ideas[i].ID)
-		if err != nil {
-			return nil, err
+	if len(ideaIDs) == 0 {
+		return ideas, nil
+	}
+
+	// Fetch all tags in a single query (avoids N+1).
+	placeholders := strings.Repeat("?,", len(ideaIDs))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+	args := make([]any, len(ideaIDs))
+	for i, id := range ideaIDs {
+		args[i] = id
+	}
+	tagRows, err := db.Query(
+		"SELECT idea_id, tag_name FROM idea_tag WHERE idea_id IN ("+placeholders+") ORDER BY idea_id, tag_name",
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query idea_tags: %w", err)
+	}
+	defer tagRows.Close()
+
+	tagMap := make(map[string][]string, len(ideaIDs))
+	for tagRows.Next() {
+		var ideaID, tagName string
+		if err := tagRows.Scan(&ideaID, &tagName); err != nil {
+			return nil, fmt.Errorf("scan idea_tag: %w", err)
 		}
-		ideas[i].Tags = tags
+		tagMap[ideaID] = append(tagMap[ideaID], tagName)
+	}
+	if err := tagRows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range ideas {
+		ideas[i].Tags = tagMap[ideas[i].ID]
 	}
 
 	return ideas, nil
@@ -348,4 +412,110 @@ func DeleteIdea(db *sql.DB, id string) error {
 	}
 
 	return tx.Commit()
+}
+
+// RunMigrations checks the schema_version table and runs any pending migrations.
+// It is idempotent: calling it multiple times is safe.
+func RunMigrations(db *sql.DB) error {
+	var currentVersion int
+	row := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`)
+	if err := row.Scan(&currentVersion); err != nil {
+		return fmt.Errorf("check schema version: %w", err)
+	}
+
+	if currentVersion < 1 {
+		if err := migrateV1(db); err != nil {
+			return fmt.Errorf("migration v1: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrateV1(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Fetch all sessions with non-empty notes
+	rows, err := tx.Query(`SELECT session_id, note, time_updated FROM session_meta WHERE note IS NOT NULL AND note != ''`)
+	if err != nil {
+		return fmt.Errorf("query notes: %w", err)
+	}
+
+	type noteRow struct {
+		sessionID   string
+		note        string
+		timeUpdated int64
+	}
+	var notes []noteRow
+	for rows.Next() {
+		var n noteRow
+		if err := rows.Scan(&n.sessionID, &n.note, &n.timeUpdated); err != nil {
+			rows.Close()
+			return err
+		}
+		notes = append(notes, n)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now().UnixMilli()
+	for _, n := range notes {
+		id := fmt.Sprintf("migrated_%s", n.sessionID)
+		ts := n.timeUpdated
+		if ts < 1e10 {
+			ts = ts * 1000 // convert seconds -> ms if needed
+		}
+		_, err = tx.Exec(`
+			INSERT INTO idea (id, content, source_session_id, time_created, time_updated)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO NOTHING
+		`, id, n.note, n.sessionID, ts, now)
+		if err != nil {
+			return fmt.Errorf("insert migrated idea: %w", err)
+		}
+		_, err = tx.Exec(`UPDATE session_meta SET note = NULL WHERE session_id = ?`, n.sessionID)
+		if err != nil {
+			return fmt.Errorf("null note: %w", err)
+		}
+	}
+
+	// Record migration as complete
+	_, err = tx.Exec(`INSERT INTO schema_version (version, applied_at) VALUES (1, ?)`, now)
+	if err != nil {
+		return fmt.Errorf("record migration v1: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// GetIdeasForSession returns all ideas linked to a session, ordered by time_created DESC.
+// Tags are not loaded.
+func GetIdeasForSession(db *sql.DB, sessionID string) ([]model.Idea, error) {
+	rows, err := db.Query(`
+		SELECT id, content, source_session_id, time_created, time_updated
+		FROM idea
+		WHERE source_session_id = ?
+		ORDER BY time_created DESC
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query ideas for session: %w", err)
+	}
+	defer rows.Close()
+
+	var ideas []model.Idea
+	for rows.Next() {
+		var idea model.Idea
+		var sourceID sql.NullString
+		if err := rows.Scan(&idea.ID, &idea.Content, &sourceID, &idea.TimeCreated, &idea.TimeUpdated); err != nil {
+			return nil, fmt.Errorf("scan idea: %w", err)
+		}
+		idea.SourceSessionID = sourceID.String
+		ideas = append(ideas, idea)
+	}
+	return ideas, rows.Err()
 }
