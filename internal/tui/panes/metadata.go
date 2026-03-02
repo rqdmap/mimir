@@ -4,27 +4,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
 )
 
-// Messages that this pane emits for parent to handle
-type AddTagMsg struct{ SessionID string }
-type AddIdeaMsg struct{ SessionID string }
-
 // MetadataPane shows session metadata: tags, session ideas, stats
 type MetadataPane struct {
-	meta          model.SessionMeta
-	messageCount  int
-	focused       bool
-	width         int
-	height        int
-	hasSession    bool // false = no session selected yet
-	sessionIdeas  []model.Idea
-	ideaMode      bool
-	selectedIdea  *model.Idea
+	meta         model.SessionMeta
+	messageCount int
+	focused      bool
+	width        int
+	height       int
+	hasSession   bool // false = no session selected yet
+	sessionIdeas []model.Idea
+	ideaMode     bool
+	selectedIdea *model.Idea
 }
 
 func NewMetadataPane(width, height int) MetadataPane {
@@ -75,18 +71,6 @@ func (m *MetadataPane) ClearSession() {
 func (m MetadataPane) Init() tea.Cmd { return nil }
 
 func (m MetadataPane) Update(msg tea.Msg) (MetadataPane, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if !m.hasSession {
-			return m, nil
-		}
-		switch msg.String() {
-		case "t":
-			return m, func() tea.Msg { return AddTagMsg{SessionID: m.meta.SessionID} }
-		case "i":
-			return m, func() tea.Msg { return AddIdeaMsg{SessionID: m.meta.SessionID} }
-		}
-	}
 	return m, nil
 }
 
@@ -116,7 +100,7 @@ func (m MetadataPane) View() string {
 	tagHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render("Tags")
 	var tagsView string
 	if len(m.meta.Tags) == 0 {
-		tagsView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No tags yet.\n[t] to add one")
+		tagsView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No tags yet.")
 	} else {
 		var renderedTags []string
 		dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("●")
@@ -124,14 +108,13 @@ func (m MetadataPane) View() string {
 			renderedTags = append(renderedTags, fmt.Sprintf("%s %s", dot, t))
 		}
 		tagsView = lipgloss.NewStyle().Width(m.width - 4).Render(strings.Join(renderedTags, "  "))
-		tagsView += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("[t] add tag")
 	}
 
 	// Session Ideas
 	ideasHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render("Session Ideas")
 	var ideasView string
 	if len(m.sessionIdeas) == 0 {
-		ideasView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No ideas yet.\n[i] to capture")
+		ideasView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No ideas yet.")
 	} else {
 		var ideaLines []string
 		for _, idea := range m.sessionIdeas {
@@ -142,7 +125,6 @@ func (m MetadataPane) View() string {
 			ideaLines = append(ideaLines, "• "+content)
 		}
 		ideasView = strings.Join(ideaLines, "\n")
-		ideasView += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("[i] add")
 	}
 
 	// Selected Idea (if in idea mode)

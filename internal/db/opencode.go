@@ -168,6 +168,7 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		            'tool', JSON_EXTRACT(p.data, '$.tool'),
 		            'state', json_object(
 		                'status', JSON_EXTRACT(p.data, '$.state.status'),
+		                'input', SUBSTR(COALESCE(JSON_EXTRACT(p.data, '$.state.input'), ''), 1, 2000),
 		                'output', SUBSTR(COALESCE(JSON_EXTRACT(p.data, '$.state.output'), ''), 1, 4000)
 		            )
 		        )
@@ -234,6 +235,7 @@ func parsePartFromFields(id string, partType, textContent, toolData, filename, m
 			Tool  string `json:"tool"`
 			State struct {
 				Status string `json:"status"`
+				Input  string `json:"input"`
 				Output string `json:"output"`
 			} `json:"state"`
 		}
@@ -241,7 +243,7 @@ func parsePartFromFields(id string, partType, textContent, toolData, filename, m
 			log.Printf("skipping tool part %s: bad JSON: %v", id, err)
 			return nil
 		}
-		return &model.Part{Type: model.PartTypeTool, ToolName: p.Tool, ToolStatus: p.State.Status, ToolOutput: p.State.Output}
+		return &model.Part{Type: model.PartTypeTool, ToolName: p.Tool, ToolStatus: p.State.Status, ToolInput: p.State.Input, ToolOutput: p.State.Output}
 	case "file":
 		return &model.Part{Type: model.PartTypeFile, Filename: filename.String, MimeType: mimeType.String}
 	case "patch":
@@ -296,6 +298,7 @@ func parsePart(partID, dataJSON string) *model.Part {
 			Tool  string `json:"tool"`
 			State struct {
 				Status string `json:"status"`
+				Input  string `json:"input"`
 				Output string `json:"output"`
 			} `json:"state"`
 		}
@@ -307,6 +310,7 @@ func parsePart(partID, dataJSON string) *model.Part {
 			Type:       model.PartTypeTool,
 			ToolName:   p.Tool,
 			ToolStatus: p.State.Status,
+			ToolInput:  p.State.Input,
 			ToolOutput: p.State.Output,
 		}
 

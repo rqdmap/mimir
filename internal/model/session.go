@@ -26,6 +26,7 @@ type Part struct {
 	Text       string
 	ToolName   string
 	ToolStatus string
+	ToolInput  string
 	ToolOutput string
 	Filename   string
 	MimeType   string

@@ -275,7 +275,7 @@ func AddIdea(db *sql.DB, content, sourceSessionID string) (string, error) {
 	defer tx.Rollback()
 
 	id := fmt.Sprintf("idea_%d", time.Now().UnixNano())
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 
 	_, err = tx.Exec(`
 		INSERT INTO idea (id, content, source_session_id, time_created, time_updated)
@@ -384,7 +384,7 @@ func UpdateIdea(db *sql.DB, id, content string) error {
 	}
 	defer tx.Rollback()
 
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	_, err = tx.Exec(`UPDATE idea SET content = ?, time_updated = ? WHERE id = ?`, content, now, id)
 	if err != nil {
 		return fmt.Errorf("update idea: %w", err)
@@ -493,8 +493,30 @@ func migrateV1(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// GetIdeasForSession returns all ideas linked to a session, ordered by time_created DESC.
-// Tags are not loaded.
+func ListTagsWithSessionCounts(db *sql.DB) ([]model.Tag, map[string]int, error) {
+	tags, err := ListAllTags(db)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rows, err := db.Query(`SELECT tag_name, COUNT(DISTINCT session_id) FROM session_tag GROUP BY tag_name`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("count sessions per tag: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			return nil, nil, fmt.Errorf("scan tag count: %w", err)
+		}
+		counts[name] = n
+	}
+	return tags, counts, rows.Err()
+}
+
 func GetIdeasForSession(db *sql.DB, sessionID string) ([]model.Idea, error) {
 	rows, err := db.Query(`
 		SELECT id, content, source_session_id, time_created, time_updated

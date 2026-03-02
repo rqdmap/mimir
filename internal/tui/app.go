@@ -28,6 +28,7 @@ type AppTab int
 const (
 	TabSessions AppTab = iota
 	TabIdeas
+	TabTags
 )
 
 // --- Async message types ---
@@ -58,6 +59,11 @@ type oneSessionTagsRefreshedMsg struct {
 	meta      model.SessionMeta
 }
 
+type tagsLoadedMsg struct {
+	tags   []model.Tag
+	counts map[string]int
+}
+
 type sessionsBatchLoadedMsg struct {
 	sessions    []model.Session
 	sessionTags map[string][]string
@@ -86,10 +92,14 @@ type App struct {
 	err    string
 
 	inputMode InputMode
-	tagFilter TagFilterView
+	tagsView  TagsView
 
 	searchMode  bool
 	searchQuery string
+
+	ideasSearchQuery string
+	tagsSearchQuery  string
+	activeTagFilter  string
 
 	loading       bool // true while initial sessions are loading
 	loadedCount   int  // how many sessions have been loaded so far
@@ -125,7 +135,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 	a.metadata = panes.NewMetadataPane(0, 0)
 	a.ideasView = NewIdeasView(0, 0, glamourStyle)
 	a.inputMode = NewInputMode(0, 0)
-	a.tagFilter = NewTagFilterView(0, 0)
+	a.tagsView = NewTagsView(0, 0)
 
 	a.sessionList.SetFocused(true)
 	a.sessionList.SetLoading(true)
@@ -136,23 +146,15 @@ func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 // --- tea.Model interface ---
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.startProgressiveLoad(), a.loadIdeas())
+	return tea.Batch(a.startProgressiveLoad(), a.loadIdeas(), a.loadTagsWithCounts())
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// When inputMode is active, forward ALL messages to it and return early.
 	if a.inputMode.IsActive() {
 		var cmd tea.Cmd
 		a.inputMode, cmd = a.inputMode.Update(msg)
-		return a, cmd
-	}
-
-	// When tagFilter is active, forward ALL messages to it and return early.
-	if a.tagFilter.IsActive() {
-		var cmd tea.Cmd
-		a.tagFilter, cmd = a.tagFilter.Update(msg)
 		return a, cmd
 	}
 
@@ -166,8 +168,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return a.handleKey(msg)
-
-	// --- Async result messages ---
 
 	case sessionsBatchLoadedMsg:
 		a.sessions = append(a.sessions, msg.sessions...)
@@ -211,6 +211,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.ideasView.SetIdeas(msg.ideas)
 		return a, cmd
 
+	case tagsLoadedMsg:
+		a.tagsView.SetTags(msg.tags, msg.counts)
+		return a, nil
+
 	case sessionIdeasRefreshedMsg:
 		a.metadata.SetSessionIdeas(msg.ideas)
 		return a, nil
@@ -219,14 +223,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = msg.err
 		return a, nil
 
-	// --- InputMode result messages ---
-
-	case InputSavedTagMsg:
+	case InputTagsUpdatedMsg:
 		if a.managerDB != nil {
-			for _, tag := range msg.Tags {
+			for _, tag := range msg.AddTags {
 				_ = db.AddSessionTag(a.managerDB, msg.SessionID, tag)
 			}
+			for _, tag := range msg.RemoveTags {
+				_ = db.RemoveSessionTag(a.managerDB, msg.SessionID, tag)
+			}
 			cmds = append(cmds, a.reloadOneSessionTags(msg.SessionID))
+			cmds = append(cmds, a.loadTagsWithCounts())
 		}
 		return a, tea.Batch(cmds...)
 
@@ -240,42 +246,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, a.reloadSessionIdeas(msg.SessionID))
 				}
 			}
-			// Always refresh idea list
 			cmds = append(cmds, a.loadIdeas())
 		}
 		return a, tea.Batch(cmds...)
 
 	case InputCancelledMsg:
-		// InputMode already deactivated itself; nothing to do.
 		return a, nil
 
-	// --- TagFilterView result messages ---
-
-	case TagFilterSelectedMsg:
-		a.tagFilter.Deactivate()
-		if a.managerDB != nil && a.opencodeDB != nil {
-			tagName := msg.TagName
-			opencodeDB := a.opencodeDB
-			managerDB := a.managerDB
-			cmds = append(cmds, func() tea.Msg {
-				sessionIDs, _ := db.ListSessionsByTag(managerDB, tagName)
-				sessions, _ := db.ListSessions(opencodeDB)
-				filtered := filterSessionsByIDs(sessions, sessionIDs)
-				tags := make(map[string][]string)
-				for _, s := range filtered {
-					t, _ := db.GetSessionTags(managerDB, s.ID)
-					tags[s.ID] = t
-				}
-				return sessionsRefreshedMsg{sessions: filtered, sessionTags: tags}
-			})
-		}
-		return a, tea.Batch(cmds...)
-
-	case TagFilterExitMsg:
-		a.tagFilter.Deactivate()
+	case TagFilterByNameMsg:
+		a.activeTagFilter = msg.TagName
+		a.activeTab = TabSessions
+		a.setFocus(FocusSessionList)
+		a.applyFilters()
 		return a, nil
-
-	// --- Pane-emitted messages ---
 
 	case panes.SessionSelectedMsg:
 		a.selectedSession = &msg.Session
@@ -296,12 +279,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.conversation, cmd = a.conversation.Update(msg)
 		return a, cmd
 
-	case panes.AddTagMsg:
-		a.inputMode.ActivateTag(msg.SessionID)
-		return a, nil
-
 	case ExitIdeasMsg:
-		// no-op: Ideas is now a tab
 		return a, nil
 
 	case DeleteIdeaConfirmedMsg:
@@ -335,6 +313,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.managerDB != nil {
 			_ = db.RemoveSessionTag(a.managerDB, msg.SessionID, msg.TagName)
 			cmds = append(cmds, a.reloadOneSessionTags(msg.SessionID))
+			cmds = append(cmds, a.loadTagsWithCounts())
 		}
 		return a, tea.Batch(cmds...)
 
@@ -350,10 +329,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
-	// Delegate to active pane and ideas view as needed
 	if a.activeTab == TabIdeas {
 		var cmd tea.Cmd
 		a.ideasView, cmd = a.ideasView.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if a.activeTab == TabTags {
+		var cmd tea.Cmd
+		a.tagsView, cmd = a.tagsView.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -384,11 +366,6 @@ func (a App) View() string {
 		return a.inputMode.View()
 	}
 
-	// TagFilter overlay takes full screen when active.
-	if a.tagFilter.IsActive() {
-		return a.tagFilter.View()
-	}
-
 	// Status bar line
 	statusBar := a.buildStatusBar()
 	contentHeight := a.height - 1
@@ -398,10 +375,13 @@ func (a App) View() string {
 
 	tabHeader := a.renderTabHeader(a.activeTab)
 	var leftPane string
-	if a.activeTab == TabSessions {
+	switch a.activeTab {
+	case TabSessions:
 		leftPane = lipgloss.JoinVertical(lipgloss.Left, tabHeader, a.sessionList.View())
-	} else {
+	case TabIdeas:
 		leftPane = lipgloss.JoinVertical(lipgloss.Left, tabHeader, a.ideasView.View())
+	case TabTags:
+		leftPane = lipgloss.JoinVertical(lipgloss.Left, tabHeader, a.tagsView.View())
 	}
 
 	var mainView string
@@ -457,16 +437,33 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			a.searchMode = false
-			// keep searchQuery — user exits typing but filter stays active
 			a.applyFilters()
 			return a, nil
 		case "backspace":
-			if len(a.searchQuery) > 0 {
-				a.searchQuery = a.searchQuery[:len(a.searchQuery)-1]
+			switch a.activeTab {
+			case TabSessions:
+				if len(a.searchQuery) > 0 {
+					a.searchQuery = a.searchQuery[:len(a.searchQuery)-1]
+				}
+			case TabIdeas:
+				if len(a.ideasSearchQuery) > 0 {
+					a.ideasSearchQuery = a.ideasSearchQuery[:len(a.ideasSearchQuery)-1]
+				}
+			case TabTags:
+				if len(a.tagsSearchQuery) > 0 {
+					a.tagsSearchQuery = a.tagsSearchQuery[:len(a.tagsSearchQuery)-1]
+				}
 			}
 		default:
-			if len(key) == 1 { // printable character
-				a.searchQuery += key
+			if len(key) == 1 {
+				switch a.activeTab {
+				case TabSessions:
+					a.searchQuery += key
+				case TabIdeas:
+					a.ideasSearchQuery += key
+				case TabTags:
+					a.tagsSearchQuery += key
+				}
 			}
 		}
 		a.applyFilters()
@@ -479,21 +476,34 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case "esc":
-		if a.searchQuery != "" {
+		switch a.activeTab {
+		case TabSessions:
 			a.searchQuery = ""
-			a.applyFilters()
+			a.activeTagFilter = ""
+		case TabIdeas:
+			a.ideasSearchQuery = ""
+		case TabTags:
+			a.tagsSearchQuery = ""
 		}
+		a.applyFilters()
 		return a, nil
 
 	case KeyRefresh:
-		a.err = ""
-		a.sessions = nil
-		a.loadedCount = 0
-		a.totalCount = 0
-		a.loading = true
-		a.sessionList.SetLoading(true)
-		if a.opencodeDB != nil {
-			return a, a.startProgressiveLoad()
+		switch a.activeTab {
+		case TabSessions:
+			a.err = ""
+			a.sessions = nil
+			a.loadedCount = 0
+			a.totalCount = 0
+			a.loading = true
+			a.sessionList.SetLoading(true)
+			if a.opencodeDB != nil {
+				return a, a.startProgressiveLoad()
+			}
+		case TabIdeas:
+			return a, a.loadIdeas()
+		case TabTags:
+			return a, a.loadTagsWithCounts()
 		}
 		return a, nil
 
@@ -502,12 +512,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "[":
-		a.activeTab = TabIdeas
+		a.activeTab = (a.activeTab + 1) % 3
 		a.setFocus(FocusSessionList)
 		return a, nil
 
 	case "]":
-		a.activeTab = TabSessions
+		a.activeTab = (a.activeTab + 2) % 3
 		a.setFocus(FocusSessionList)
 		return a, nil
 
@@ -517,12 +527,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "T":
-		// Open tag filter overlay
-		if a.managerDB != nil {
-			tags, _ := db.ListAllTags(a.managerDB)
-			a.tagFilter.SetTags(tags)
-		}
-		a.tagFilter.Activate()
+		a.activeTab = TabTags
+		a.setFocus(FocusSessionList)
 		return a, nil
 
 	case "A":
@@ -543,15 +549,25 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	if key == "t" {
+		if a.activeTab == TabSessions && a.selectedSession != nil {
+			existingTags := a.sessionTags[a.selectedSession.ID]
+			a.inputMode.ActivateTag(a.selectedSession.ID, a.selectedSession.Title, existingTags)
+			return a, nil
+		}
+	}
+
 	// 'i' — capture idea from any pane
 	// In Ideas tab: always standalone (no session link)
 	// In Sessions tab: linked to the currently selected session
 	if key == "i" {
 		sessionID := ""
+		sessionTitle := ""
 		if a.activeTab == TabSessions && a.selectedSession != nil {
 			sessionID = a.selectedSession.ID
+			sessionTitle = a.selectedSession.Title
 		}
-		a.inputMode.ActivateIdea(sessionID)
+		a.inputMode.ActivateIdea(sessionID, sessionTitle)
 		return a, nil
 	}
 
@@ -586,6 +602,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// For all other keys in Ideas tab, delegate to ideasView
 		var cmd tea.Cmd
 		a.ideasView, cmd = a.ideasView.Update(msg)
+		return a, cmd
+	}
+
+	if a.activeTab == TabTags && a.focus == FocusSessionList {
+		var cmd tea.Cmd
+		a.tagsView, cmd = a.tagsView.Update(msg)
 		return a, cmd
 	}
 
@@ -713,7 +735,7 @@ func (a *App) recalcLayout() tea.Cmd {
 
 	a.inputMode.width = a.width
 	a.inputMode.height = a.height
-	a.tagFilter.SetSize(a.width, a.height)
+	a.tagsView.SetSize(leftPaneW, h-1)
 	return tea.Batch(cmds...)
 }
 
@@ -886,6 +908,20 @@ func (a App) loadIdeas() tea.Cmd {
 	}
 }
 
+func (a App) loadTagsWithCounts() tea.Cmd {
+	managerDB := a.managerDB
+	return func() tea.Msg {
+		if managerDB == nil {
+			return tagsLoadedMsg{tags: nil, counts: make(map[string]int)}
+		}
+		tags, counts, err := db.ListTagsWithSessionCounts(managerDB)
+		if err != nil {
+			return errMsg{err: err.Error()}
+		}
+		return tagsLoadedMsg{tags: tags, counts: counts}
+	}
+}
+
 // reloadSessionMeta reloads just the session metadata for display.
 func (a App) reloadSessionMeta(sessionID string) tea.Cmd {
 	managerDB := a.managerDB
@@ -961,10 +997,22 @@ func filterSessionsByTitle(sessions []model.Session, query string) []model.Sessi
 	return out
 }
 
+func filterSessionsByTagName(sessions []model.Session, sessionTags map[string][]string, tagName string) []model.Session {
+	var out []model.Session
+	for _, s := range sessions {
+		for _, t := range sessionTags[s.ID] {
+			if t == tagName {
+				out = append(out, s)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // applyFilters rebuilds the session list applying sub-agent filter and search filter.
 func (a *App) applyFilters() {
 	sessions := a.sessions
-	// Filter sub-agents if requested
 	if a.hideSubAgents {
 		var filtered []model.Session
 		for _, s := range sessions {
@@ -974,11 +1022,12 @@ func (a *App) applyFilters() {
 		}
 		sessions = filtered
 	}
-	// Apply search filter
 	if a.searchQuery != "" {
 		sessions = filterSessionsByTitle(sessions, a.searchQuery)
 	}
-	// Build tags subset
+	if a.activeTagFilter != "" {
+		sessions = filterSessionsByTagName(sessions, a.sessionTags, a.activeTagFilter)
+	}
 	tags := make(map[string][]string)
 	for _, s := range sessions {
 		if t, ok := a.sessionTags[s.ID]; ok {
@@ -986,6 +1035,9 @@ func (a *App) applyFilters() {
 		}
 	}
 	a.sessionList.SetSessions(sessions, tags)
+
+	a.ideasView.SetFilter(a.ideasSearchQuery)
+	a.tagsView.SetFilter(a.tagsSearchQuery)
 }
 
 // --- Additional async message types for metadata refresh ---
@@ -1002,21 +1054,60 @@ func (a App) renderTabHeader(active AppTab) string {
 	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Padding(0, 1)
 	sess := inactive.Render("Sessions")
 	ideas := inactive.Render("Ideas")
-	if active == TabSessions {
+	tags := inactive.Render("Tags")
+	switch active {
+	case TabSessions:
 		sess = activeStyle.Render("Sessions")
-	} else {
+	case TabIdeas:
 		ideas = activeStyle.Render("Ideas")
+	case TabTags:
+		tags = activeStyle.Render("Tags")
 	}
-	return ideas + "  " + sess
+	return ideas + "  " + sess + "  " + tags
 }
 
 func (a App) buildStatusBar() string {
 	if a.searchMode {
-		searchBar := fmt.Sprintf("Search: %s_  │  Searching titles only  │  [Esc] cancel", a.searchQuery)
+		var q string
+		var hint string
+		switch a.activeTab {
+		case TabSessions:
+			q = a.searchQuery
+			hint = "session titles"
+		case TabIdeas:
+			q = a.ideasSearchQuery
+			hint = "ideas"
+		case TabTags:
+			q = a.tagsSearchQuery
+			hint = "tags"
+		}
+		searchBar := fmt.Sprintf("Search: %s_  │  Filtering %s  │  [Esc] done", q, hint)
 		return StatusBarStyle.Render(searchBar)
-	} else if a.searchQuery != "" {
-		filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.searchQuery)
-		return StatusBarStyle.Render(filterBar)
+	}
+
+	switch a.activeTab {
+	case TabSessions:
+		var filterParts []string
+		if a.activeTagFilter != "" {
+			filterParts = append(filterParts, fmt.Sprintf("Tag: #%s", a.activeTagFilter))
+		}
+		if a.searchQuery != "" {
+			filterParts = append(filterParts, fmt.Sprintf("Search: %s", a.searchQuery))
+		}
+		if len(filterParts) > 0 {
+			filterBar := strings.Join(filterParts, "  │  ") + "  │  [/] edit  [Esc] clear"
+			return StatusBarStyle.Render(filterBar)
+		}
+	case TabIdeas:
+		if a.ideasSearchQuery != "" {
+			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.ideasSearchQuery)
+			return StatusBarStyle.Render(filterBar)
+		}
+	case TabTags:
+		if a.tagsSearchQuery != "" {
+			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.tagsSearchQuery)
+			return StatusBarStyle.Render(filterBar)
+		}
 	}
 
 	if a.loading && a.totalCount > 0 {
@@ -1029,22 +1120,24 @@ func (a App) buildStatusBar() string {
 
 	var parts []string
 
-	// Focus hint
 	switch a.focus {
 	case FocusSessionList:
-		if a.activeTab == TabIdeas {
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] jump to session  []] sessions tab")
-		} else {
+		switch a.activeTab {
+		case TabIdeas:
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] jump to session  [/] search  [Esc] clear  [[]]] switch tab")
+		case TabTags:
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] filter sessions  [/] search  [Esc] clear  [[]]] switch tab")
+		default:
 			agentHint := "[A] show sub-agents"
 			if !a.hideSubAgents {
 				agentHint = "[A] hide sub-agents"
 			}
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] open  [[] ideas  [i] idea  [T] tags  "+agentHint)
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] open  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
 		}
 	case FocusConversation:
 		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page")
 	case FocusMetadata:
-		parts = append(parts, "[t] tag  [i] idea  [[] ideas  []] sessions")
+		parts = append(parts, "[[] ideas  []] sessions  [T] tags")
 	}
 
 	parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
@@ -1066,8 +1159,8 @@ func (a App) overlayHelp(background string) string {
   [Tab / Shift+Tab]  Cycle pane focus
   [r]               Refresh sessions
   [/]               Search sessions (title only)
-	  [[] / []]         Switch Ideas / Sessions tab
-  [T]               Filter by tag
+  [[] / []]         Cycle tabs (Ideas / Sessions / Tags)
+  [T]               Switch to Tags tab
   [A]               Toggle sub-agent sessions
   [?]               Toggle this help
   [q / Ctrl+C]      Quit
@@ -1075,19 +1168,20 @@ func (a App) overlayHelp(background string) string {
   In Session List:
   [↑ ↓ / j k]       Navigate
   [Enter]           Open session
+  [i]               Capture idea (linked to session)
+  [t]               Add tag to session
 
   In Conversation:
   [↑ ↓ / j k]       Scroll
   [Ctrl+D / Ctrl+U] Page down/up
 
-  In Metadata:
-  [t]               Add tag
-  [i]               Capture idea
-
   In Ideas Tab:
   [Enter]           Jump to linked session
   [e]               Edit idea
-  [d]               Delete idea (confirm y/n)`
+  [d]               Delete idea (confirm y/n)
+
+  In Tags Tab:
+  [Enter]           Filter sessions by tag`
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

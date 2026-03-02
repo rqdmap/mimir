@@ -2,194 +2,157 @@ package tui
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
 )
 
-// Messages for tag operations
+type TagFilterByNameMsg struct{ TagName string }
 
-// TagFilterSelectedMsg is emitted when the user selects a tag in filter mode.
-type TagFilterSelectedMsg struct{ TagName string }
-
-// TagFilterExitMsg is emitted when the user presses Esc to exit filter mode.
-type TagFilterExitMsg struct{}
-
-// RemoveTagMsg is emitted when user wants to remove a specific tag from a session.
 type RemoveTagMsg struct {
 	SessionID string
 	TagName   string
 }
 
-// TagItem implements list.Item for tags.
-type TagItem struct {
-	Tag model.Tag
+type TagsItem struct {
+	Tag   model.Tag
+	Count int
 }
 
-func (t TagItem) Title() string       { return t.Tag.Name }
-func (t TagItem) Description() string { return "" }
-func (t TagItem) FilterValue() string { return t.Tag.Name }
-
-// TagFilterView is a full-screen overlay for browsing and selecting a tag to filter by.
-type TagFilterView struct {
-	list   list.Model
-	width  int
-	height int
-	active bool
-}
-
-// tagDelegate is a custom delegate to render the dot
-type tagDelegate struct{}
-
-func (d tagDelegate) Height() int                             { return 1 }
-func (d tagDelegate) Spacing() int                            { return 0 }
-func (d tagDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
-func (d tagDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	t, ok := listItem.(TagItem)
-	if !ok {
-		return
+func (i TagsItem) Title() string { return i.Tag.Name }
+func (i TagsItem) Description() string {
+	if i.Count == 1 {
+		return "1 session"
 	}
+	return fmt.Sprintf("%d sessions", i.Count)
+}
+func (i TagsItem) FilterValue() string { return i.Tag.Name }
 
-	str := t.Tag.Name
-	dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("●")
-	
-	// Unselected state
-	itemStr := fmt.Sprintf("%s %s", dot, str)
-	
-	// Selected state
-	if index == m.Index() {
-		itemStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render(fmt.Sprintf("%s %s", dot, str))
-	}
-
-	fmt.Fprint(w, itemStr)
+type TagsView struct {
+	tags         []model.Tag
+	counts       map[string]int
+	searchFilter string
+	list         list.Model
+	width        int
+	height       int
 }
 
-// NewTagFilterView creates a new tag filter view.
-func NewTagFilterView(width, height int) TagFilterView {
-	delegate := tagDelegate{}
+func NewTagsView(width, height int) TagsView {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = true
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
+		Foreground(lipgloss.Color("#7D56F4")).
+		BorderForeground(lipgloss.Color("#7D56F4"))
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
+		Foreground(lipgloss.Color("#7D56F4")).
+		BorderForeground(lipgloss.Color("#7D56F4"))
 
-	l := list.New([]list.Item{}, delegate, width, height)
-
-	l.Title = "Filter by Tag"
+	l := list.New([]list.Item{}, delegate, 0, 0)
+	l.Title = "Tags"
 	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
-	l.Styles.Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4"))
+	l.SetFilteringEnabled(false)
+	l.DisableQuitKeybindings()
+	l.Styles.Title = lipgloss.NewStyle().
+		Background(lipgloss.Color("#7D56F4")).
+		Foreground(lipgloss.Color("230")).
+		Padding(0, 1)
 
-	return TagFilterView{
+	v := TagsView{
 		list:   l,
 		width:  width,
 		height: height,
-		active: false,
+		counts: make(map[string]int),
 	}
+	v.setListSize(width, height)
+	return v
 }
 
-// SetTags updates the list of tags.
-func (tf *TagFilterView) SetTags(tags []model.Tag) {
-	items := make([]list.Item, len(tags))
-	for i, t := range tags {
-		items[i] = TagItem{Tag: t}
+func (v *TagsView) SetTags(tags []model.Tag, counts map[string]int) {
+	v.tags = tags
+	v.counts = counts
+	v.list.Title = fmt.Sprintf("Tags (%d)", len(tags))
+	v.applyFilter()
+}
+
+func (v *TagsView) SetFilter(q string) {
+	v.searchFilter = q
+	v.applyFilter()
+}
+
+func (v *TagsView) applyFilter() {
+	q := strings.ToLower(v.searchFilter)
+	var items []list.Item
+	for _, t := range v.tags {
+		if q == "" || strings.Contains(strings.ToLower(t.Name), q) {
+			items = append(items, TagsItem{Tag: t, Count: v.counts[t.Name]})
+		}
 	}
-	tf.list.SetItems(items)
+	v.list.SetItems(items)
 }
 
-// SetSize updates the size of the view.
-func (tf *TagFilterView) SetSize(width, height int) {
-	tf.width = width
-	tf.height = height
-	// Add some padding for the border
-	listWidth := width - 4
-	listHeight := height - 4
-	if listWidth < 0 {
-		listWidth = 0
+func (v *TagsView) SetSize(width, height int) {
+	v.width = width
+	v.height = height
+	v.setListSize(width, height)
+}
+
+func (v *TagsView) setListSize(width, height int) {
+	w := width - 2
+	h := height - 2
+	if w < 0 {
+		w = 0
 	}
-	if listHeight < 0 {
-		listHeight = 0
+	if h < 0 {
+		h = 0
 	}
-	tf.list.SetSize(listWidth, listHeight)
+	v.list.SetSize(w, h)
 }
 
-// Activate shows the view.
-func (tf *TagFilterView) Activate() {
-	tf.active = true
-	tf.list.ResetSelected()
-}
-
-// Deactivate hides the view.
-func (tf *TagFilterView) Deactivate() {
-	tf.active = false
-	tf.list.ResetFilter()
-}
-
-// IsActive returns whether the view is currently active.
-func (tf TagFilterView) IsActive() bool {
-	return tf.active
-}
-
-// Init initializes the view.
-func (tf TagFilterView) Init() tea.Cmd {
-	return nil
-}
-
-// Update handles messages.
-func (tf TagFilterView) Update(msg tea.Msg) (TagFilterView, tea.Cmd) {
-	if !tf.active {
-		return tf, nil
+func (v TagsView) SelectedTag() *TagsItem {
+	item, ok := v.list.SelectedItem().(TagsItem)
+	if !ok {
+		return nil
 	}
+	return &item
+}
 
+func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			if selectedItem := tf.list.SelectedItem(); selectedItem != nil {
-				return tf, func() tea.Msg {
-					return TagFilterSelectedMsg{TagName: selectedItem.(TagItem).Tag.Name}
-				}
+		if msg.String() == "enter" {
+			if sel := v.SelectedTag(); sel != nil {
+				tagName := sel.Tag.Name
+				return v, func() tea.Msg { return TagFilterByNameMsg{TagName: tagName} }
 			}
-		case "esc":
-			return tf, func() tea.Msg { return TagFilterExitMsg{} }
 		}
 	}
 
 	var cmd tea.Cmd
-	tf.list, cmd = tf.list.Update(msg)
-	return tf, cmd
+	v.list, cmd = v.list.Update(msg)
+	return v, cmd
 }
 
-// View renders the view.
-func (tf TagFilterView) View() string {
-	if !tf.active {
-		return ""
-	}
+func (v TagsView) View() string {
+	borderColor := lipgloss.Color("240")
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
-		Width(tf.width-2).
-		Height(tf.height-2).
-		Padding(1, 2)
+		BorderForeground(borderColor).
+		Width(v.width - 2).
+		Height(v.height - 2)
 
-	// Render custom list items with dots if needed, but list.Model handles items.
-	// We need to customize the delegate if we want the dot.
-	// For now, let's just render the list within the border.
+	if len(v.tags) == 0 {
+		return style.Align(lipgloss.Center, lipgloss.Center).
+			Render("No tags yet.\n\nPress 't' on a selected session\nto add the first tag.")
+	}
 
-	// Ensure title includes help hint if list doesn't show it
-	content := tf.list.View()
-
-	// Add footer hint
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).MarginTop(1)
-	help := helpStyle.Render("[Enter] filter  [Esc] cancel")
-
-	return style.Render(lipgloss.JoinVertical(lipgloss.Left, content, help))
+	return style.Render(v.list.View())
 }
 
-// ParseCommaSeparatedTags splits "work, ai, idea" into ["work", "ai", "idea"].
-// Trims whitespace, lowercases, skips empty strings.
 func ParseCommaSeparatedTags(input string) []string {
 	parts := strings.Split(input, ",")
 	result := []string{}

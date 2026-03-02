@@ -1,5 +1,3 @@
-// Package tui provides the terminal user interface for oc-manager.
-// input.go implements the overlay input mode system for idea capture and tag entry.
 package tui
 
 import (
@@ -10,51 +8,46 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// InputTarget describes what kind of content we are capturing.
 type InputTarget int
 
 const (
-	// InputTargetNone means no input is active.
 	InputTargetNone InputTarget = iota
-	// InputTargetIdea means we are capturing a single-line idea.
 	InputTargetIdea
-	// InputTargetTag means we are adding comma-separated tags.
 	InputTargetTag
 )
 
-// InputSavedIdeaMsg is emitted when the user saves an idea.
 type InputSavedIdeaMsg struct {
-	IdeaID    string // non-empty when editing an existing idea
+	IdeaID    string
 	SessionID string
 	Content   string
 }
 
-// InputSavedTagMsg is emitted when the user saves tags.
-// Tags are already parsed from comma-separated input.
-type InputSavedTagMsg struct {
-	SessionID string
-	Tags      []string // parsed from comma-separated input
+type InputTagsUpdatedMsg struct {
+	SessionID  string
+	AddTags    []string
+	RemoveTags []string
 }
 
-// InputCancelledMsg is emitted when the user cancels input (Esc).
 type InputCancelledMsg struct{}
 
-// InputMode manages overlay input fields for ideas and tags.
-// It is designed to be held by the App model and activated/deactivated
-// in response to messages from panes.
 type InputMode struct {
-	target    InputTarget
-	ideaID    string // non-empty when editing an existing idea
-	sessionID string
+	target       InputTarget
+	ideaID       string
+	sessionID    string
+	sessionTitle string
 
 	textinput textinput.Model
+
+	workingTags  []string
+	originalTags []string
+	tagListFocus bool
+	tagListIdx   int
 
 	active bool
 	width  int
 	height int
 }
 
-// NewInputMode creates a new InputMode with the given terminal dimensions.
 func NewInputMode(width, height int) InputMode {
 	ti := textinput.New()
 	ti.Width = 56
@@ -67,12 +60,11 @@ func NewInputMode(width, height int) InputMode {
 	}
 }
 
-// ActivateIdea sets up the single-line textinput for capturing a new idea
-// linked to the given session and activates input mode.
-func (im *InputMode) ActivateIdea(sessionID string) {
+func (im *InputMode) ActivateIdea(sessionID, sessionTitle string) {
 	im.target = InputTargetIdea
 	im.ideaID = ""
 	im.sessionID = sessionID
+	im.sessionTitle = sessionTitle
 	im.active = true
 
 	ti := textinput.New()
@@ -82,7 +74,6 @@ func (im *InputMode) ActivateIdea(sessionID string) {
 	im.textinput = ti
 }
 
-// ActivateIdeaEdit sets up the textinput pre-filled with existing idea content for editing.
 func (im *InputMode) ActivateIdeaEdit(ideaID, content string) {
 	im.target = InputTargetIdea
 	im.ideaID = ideaID
@@ -98,45 +89,47 @@ func (im *InputMode) ActivateIdeaEdit(ideaID, content string) {
 	im.textinput = ti
 }
 
-// ActivateTag sets up the single-line textinput for entering comma-separated
-// tags and activates input mode.
-func (im *InputMode) ActivateTag(sessionID string) {
+func (im *InputMode) ActivateTag(sessionID, sessionTitle string, existingTags []string) {
 	im.target = InputTargetTag
 	im.ideaID = ""
 	im.sessionID = sessionID
+	im.sessionTitle = sessionTitle
 	im.active = true
 
+	im.originalTags = make([]string, len(existingTags))
+	copy(im.originalTags, existingTags)
+	im.workingTags = make([]string, len(existingTags))
+	copy(im.workingTags, existingTags)
+	im.tagListFocus = false
+	im.tagListIdx = 0
+
 	ti := textinput.New()
-	ti.Placeholder = "work, ai, idea"
+	ti.Placeholder = "Add tag..."
 	ti.Width = 56
 	ti.Focus()
 	im.textinput = ti
 }
 
-// IsActive returns whether input mode is currently active.
 func (im InputMode) IsActive() bool {
 	return im.active
 }
 
-// Deactivate resets all input state and marks the mode inactive.
 func (im *InputMode) Deactivate() {
 	im.active = false
 	im.target = InputTargetNone
 	im.ideaID = ""
 	im.sessionID = ""
+	im.sessionTitle = ""
+	im.workingTags = nil
+	im.originalTags = nil
+	im.tagListFocus = false
+	im.tagListIdx = 0
 }
 
-// Init implements tea.Model. Returns nil because no initial commands are needed.
 func (im InputMode) Init() tea.Cmd {
 	return nil
 }
 
-// Update implements tea.Model. Handles key events for the active input target.
-//
-// For textinput (idea/tag mode):
-//   - enter: emit InputSavedIdeaMsg or InputSavedTagMsg and deactivate
-//   - esc: emit InputCancelledMsg and deactivate
-//   - all other keys: forwarded to the textinput component
 func (im InputMode) Update(msg tea.Msg) (InputMode, tea.Cmd) {
 	if !im.active {
 		return im, nil
@@ -165,22 +158,105 @@ func (im InputMode) Update(msg tea.Msg) (InputMode, tea.Cmd) {
 			}
 
 		case InputTargetTag:
-			switch msg.String() {
-			case "enter":
-				raw := im.textinput.Value()
-				tags := parseCommaSeparatedTags(raw)
+			key := msg.String()
+			switch key {
+			case "esc":
+				addTags, removeTags := diffTagSlices(im.originalTags, im.workingTags)
 				sessionID := im.sessionID
 				im.Deactivate()
-				return im, func() tea.Msg {
-					return InputSavedTagMsg{SessionID: sessionID, Tags: tags}
+				if len(addTags) == 0 && len(removeTags) == 0 {
+					return im, func() tea.Msg { return InputCancelledMsg{} }
 				}
-			case "esc":
-				im.Deactivate()
-				return im, func() tea.Msg { return InputCancelledMsg{} }
+				return im, func() tea.Msg {
+					return InputTagsUpdatedMsg{SessionID: sessionID, AddTags: addTags, RemoveTags: removeTags}
+				}
+
+			case "enter":
+				if im.tagListFocus {
+					im.tagListFocus = false
+					im.textinput.Focus()
+				} else {
+					raw := strings.TrimSpace(im.textinput.Value())
+					if raw != "" && !containsTag(im.workingTags, raw) {
+						im.workingTags = append(im.workingTags, raw)
+					}
+					ti := textinput.New()
+					ti.Placeholder = "Add tag..."
+					ti.Width = 56
+					ti.Focus()
+					im.textinput = ti
+				}
+
+			case "up":
+				if im.tagListFocus {
+					if im.tagListIdx > 0 {
+						im.tagListIdx--
+					}
+				} else if len(im.workingTags) > 0 {
+					im.tagListFocus = true
+					im.tagListIdx = len(im.workingTags) - 1
+					im.textinput.Blur()
+				}
+
+			case "k":
+				if im.tagListFocus {
+					if im.tagListIdx > 0 {
+						im.tagListIdx--
+					}
+				} else {
+					var cmd tea.Cmd
+					im.textinput, cmd = im.textinput.Update(msg)
+					return im, cmd
+				}
+
+			case "down":
+				if im.tagListFocus {
+					if im.tagListIdx < len(im.workingTags)-1 {
+						im.tagListIdx++
+					} else {
+						im.tagListFocus = false
+						im.textinput.Focus()
+					}
+				}
+
+			case "j":
+				if im.tagListFocus {
+					if im.tagListIdx < len(im.workingTags)-1 {
+						im.tagListIdx++
+					} else {
+						im.tagListFocus = false
+						im.textinput.Focus()
+					}
+				} else {
+					var cmd tea.Cmd
+					im.textinput, cmd = im.textinput.Update(msg)
+					return im, cmd
+				}
+
+			case "d", "x":
+				if im.tagListFocus {
+					im.deleteSelectedTag()
+				} else {
+					var cmd tea.Cmd
+					im.textinput, cmd = im.textinput.Update(msg)
+					return im, cmd
+				}
+
+			case "backspace", "delete":
+				if im.tagListFocus {
+					im.deleteSelectedTag()
+				} else {
+					var cmd tea.Cmd
+					im.textinput, cmd = im.textinput.Update(msg)
+					return im, cmd
+				}
+
 			default:
-				var cmd tea.Cmd
-				im.textinput, cmd = im.textinput.Update(msg)
-				return im, cmd
+				if !im.tagListFocus {
+					var cmd tea.Cmd
+					im.textinput, cmd = im.textinput.Update(msg)
+					return im, cmd
+				}
 			}
 		}
 	}
@@ -188,10 +264,19 @@ func (im InputMode) Update(msg tea.Msg) (InputMode, tea.Cmd) {
 	return im, nil
 }
 
-// View renders the input overlay centered within the terminal.
-// Returns an empty string if not active.
-//
-// For idea/tag mode: single-line textinput with appropriate prompt and hints.
+func (im *InputMode) deleteSelectedTag() {
+	if im.tagListIdx < len(im.workingTags) {
+		im.workingTags = append(im.workingTags[:im.tagListIdx], im.workingTags[im.tagListIdx+1:]...)
+		if im.tagListIdx >= len(im.workingTags) && im.tagListIdx > 0 {
+			im.tagListIdx--
+		}
+		if len(im.workingTags) == 0 {
+			im.tagListFocus = false
+			im.textinput.Focus()
+		}
+	}
+}
+
 func (im InputMode) View() string {
 	if !im.active {
 		return ""
@@ -209,9 +294,8 @@ func (im InputMode) View() string {
 		Bold(true).
 		Foreground(lipgloss.Color("252"))
 
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
 
 	var content string
 
@@ -220,13 +304,14 @@ func (im InputMode) View() string {
 		var title, prompt string
 		if im.ideaID != "" {
 			title = titleStyle.Render("Edit Idea")
-			prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render("Edit idea content:")
+			prompt = labelStyle.Render("Edit idea content:")
 		} else if im.sessionID != "" {
 			title = titleStyle.Render("Capture Idea")
-			prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render("Capture idea (linked to current session):")
+			sessionLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render(im.sessionTitle)
+			prompt = labelStyle.Render("Linked to: ") + sessionLabel
 		} else {
 			title = titleStyle.Render("Capture Idea")
-			prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render("Capture standalone idea (no session link):")
+			prompt = labelStyle.Render("Standalone idea (no session link):")
 		}
 		hint := hintStyle.Render("[Enter] save  [Esc] cancel")
 		content = lipgloss.JoinVertical(lipgloss.Left,
@@ -240,18 +325,47 @@ func (im InputMode) View() string {
 
 	case InputTargetTag:
 		title := titleStyle.Render("Add Tags")
-		prompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250")).
-			Render("Add tags (comma-separated, e.g. work,ai):")
-		hint := hintStyle.Render("[Enter] save  [Esc] cancel")
-		content = lipgloss.JoinVertical(lipgloss.Left,
+		sessionLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render(im.sessionTitle)
+
+		selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Bold(true)
+		normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+
+		var tagLines []string
+		if len(im.workingTags) == 0 {
+			tagLines = append(tagLines, hintStyle.Render("  (none)"))
+		} else {
+			for i, t := range im.workingTags {
+				if im.tagListFocus && i == im.tagListIdx {
+					tagLines = append(tagLines, selectedStyle.Render("▶ "+t))
+				} else {
+					tagLines = append(tagLines, normalStyle.Render("  "+t))
+				}
+			}
+		}
+
+		var hintText string
+		if im.tagListFocus {
+			hintText = "[j/k] navigate  [d/x] delete  [Enter] back  [Esc] done"
+		} else {
+			hintText = "[Enter] add tag  [↑] select tags  [Esc] done"
+		}
+
+		lines := []string{
 			title,
 			"",
-			prompt,
+			labelStyle.Render("Session: ") + sessionLabel,
+			"",
+			labelStyle.Render("Tags:"),
+		}
+		lines = append(lines, tagLines...)
+		lines = append(lines,
+			"",
+			labelStyle.Render("New tag:"),
 			im.textinput.View(),
 			"",
-			hint,
+			hintStyle.Render(hintText),
 		)
+		content = lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	default:
 		return ""
@@ -266,16 +380,33 @@ func (im InputMode) View() string {
 	)
 }
 
-// parseCommaSeparatedTags splits a comma-separated string like "work, ai, idea"
-// into a slice of trimmed, non-empty tag strings.
-func parseCommaSeparatedTags(input string) []string {
-	parts := strings.Split(input, ",")
-	var tags []string
-	for _, p := range parts {
-		t := strings.TrimSpace(p)
-		if t != "" {
-			tags = append(tags, t)
+func diffTagSlices(original, working []string) (addTags, removeTags []string) {
+	origSet := make(map[string]bool, len(original))
+	for _, t := range original {
+		origSet[t] = true
+	}
+	workSet := make(map[string]bool, len(working))
+	for _, t := range working {
+		workSet[t] = true
+	}
+	for _, t := range working {
+		if !origSet[t] {
+			addTags = append(addTags, t)
 		}
 	}
-	return tags
+	for _, t := range original {
+		if !workSet[t] {
+			removeTags = append(removeTags, t)
+		}
+	}
+	return
+}
+
+func containsTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }

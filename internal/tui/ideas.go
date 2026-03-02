@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -30,6 +31,7 @@ type IdeaSessionRequestMsg struct{ SessionID string }
 type ideaPreviewRenderedMsg struct{ content string }
 type IdeasView struct {
 	ideas         []model.Idea
+	searchFilter  string
 	list          list.Model
 	preview       viewport.Model
 	width         int
@@ -101,12 +103,24 @@ func NewIdeasView(width, height int, glamourStyle string) IdeasView {
 
 func (v *IdeasView) SetIdeas(ideas []model.Idea) tea.Cmd {
 	v.ideas = ideas
-	items := make([]list.Item, len(ideas))
-	for i, idea := range ideas {
-		items[i] = IdeaItem{Idea: idea}
+	v.applyFilter()
+	return v.renderPreviewCmd()
+}
+
+func (v *IdeasView) SetFilter(q string) {
+	v.searchFilter = q
+	v.applyFilter()
+}
+
+func (v *IdeasView) applyFilter() {
+	q := strings.ToLower(v.searchFilter)
+	var items []list.Item
+	for _, idea := range v.ideas {
+		if q == "" || strings.Contains(strings.ToLower(idea.Content), q) {
+			items = append(items, IdeaItem{Idea: idea})
+		}
 	}
 	v.list.SetItems(items)
-	return v.renderPreviewCmd()
 }
 
 func (v *IdeasView) SetSize(width, height int) tea.Cmd {
@@ -166,7 +180,8 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 		if v.confirmDel {
 			switch msg.String() {
 			case "y", "Y":
-				cmd = func() tea.Msg { return DeleteIdeaConfirmedMsg{ID: v.deleteTarget} }
+				targetID := v.deleteTarget
+				cmd = func() tea.Msg { return DeleteIdeaConfirmedMsg{ID: targetID} }
 				cmds = append(cmds, cmd)
 				v.confirmDel = false
 				v.deleteTarget = ""

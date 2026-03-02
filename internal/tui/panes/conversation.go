@@ -160,6 +160,10 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 			c.viewport.HalfViewDown()
 		case "ctrl+u":
 			c.viewport.HalfViewUp()
+		case "g":
+			c.viewport.GotoTop()
+		case "G":
+			c.viewport.GotoBottom()
 		}
 	case tea.WindowSizeMsg:
 		cmd := c.SetSize(msg.Width, msg.Height)
@@ -282,9 +286,30 @@ func renderContentStandalone(messages []model.Message, renderer *glamour.TermRen
 				if status == "" {
 					status = "running"
 				}
-				line := fmt.Sprintf("[⚙ %s] ── %s ──", part.ToolName, status)
-				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
+				statusStyle := lipgloss.NewStyle().Faint(true)
+				switch status {
+				case "complete":
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+				case "error":
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+				case "running":
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+				}
+				toolNameStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+				line := fmt.Sprintf("[⚙ %s] %s",
+					toolNameStyle.Render(part.ToolName),
+					statusStyle.Render("── "+status+" ──"),
+				)
+				sb.WriteString(line)
 				sb.WriteString("\n")
+				if part.ToolInput != "" {
+					inp := part.ToolInput
+					if len(inp) > 500 {
+						inp = inp[:500] + "..."
+					}
+					sb.WriteString(lipgloss.NewStyle().Faint(true).Render("  ↳ " + inp))
+					sb.WriteString("\n")
+				}
 				if part.ToolOutput != "" {
 					out := part.ToolOutput
 					if len(out) > 4000 {
