@@ -28,7 +28,7 @@ type AsyncConvRenderMsg struct {
 func newConvRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
 		r, _ := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
+			glamour.WithStylePath(style),
 			glamour.WithWordWrap(width),
 		)
 		return ConvRendererReadyMsg{Renderer: r, Width: width}
@@ -262,30 +262,6 @@ func (c ConversationPane) View() string {
 
 	inner := title + "\n" + c.viewport.View()
 	return style.Render(inner)
-}
-
-// renderMarkdown renders text as markdown using glamour, falling back to plain text.
-func renderMarkdown(text string, width int) (result string) {
-	defer func() {
-		if r := recover(); r != nil {
-			result = text
-		}
-	}()
-	if width <= 0 {
-		width = 80
-	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
-		return text
-	}
-	out, err := r.Render(text)
-	if err != nil {
-		return text
-	}
-	return out
 }
 
 // renderMarkdownCached renders text as markdown using a pre-built glamour renderer.

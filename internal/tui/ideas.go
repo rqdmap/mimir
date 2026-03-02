@@ -70,7 +70,7 @@ func (i IdeaItem) FilterValue() string { return i.Idea.Content }
 func newRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
 		r, _ := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
+			glamour.WithStylePath(style),
 			glamour.WithWordWrap(width),
 		)
 		return ideaRendererReadyMsg{renderer: r, rendererWidth: width}
