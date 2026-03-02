@@ -710,8 +710,8 @@ func (a *App) recalcLayout() tea.Cmd {
 
 	switch {
 	case a.width >= 120:
-		listW := int(float64(a.width) * 0.30)
-		convW := int(float64(a.width) * 0.50)
+		listW := int(float64(a.width) * 0.27)
+		convW := int(float64(a.width) * 0.57)
 		metaW := a.width - listW - convW
 		leftPaneW = listW
 		a.sessionList.SetSize(listW, h-1)
@@ -1095,6 +1095,24 @@ func (a App) buildStatusBar() string {
 		return StatusBarStyle.Render(searchBar)
 	}
 
+	if a.focus == FocusConversation && (a.conversation.SearchMode() || a.conversation.SearchMatchCount() > 0) {
+		var parts []string
+		if a.conversation.SearchMode() {
+			matchInfo := ""
+			if a.conversation.SearchMatchCount() > 0 {
+				matchInfo = fmt.Sprintf(" (%d/%d)", a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount())
+			} else if a.conversation.SearchQuery() != "" {
+				matchInfo = " (no matches)"
+			}
+			parts = append(parts, fmt.Sprintf("/ %s_%s  │  [n/N] navigate  [Esc/Enter] close", a.conversation.SearchQuery(), matchInfo))
+		} else {
+			parts = append(parts, fmt.Sprintf("[n/N] navigate  (%d/%d: %q)  │  [/] new search",
+				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery()))
+		}
+		parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
+		return StatusBarStyle.Render(strings.Join(parts, "  │  "))
+	}
+
 	switch a.activeTab {
 	case TabSessions:
 		var filterParts []string
@@ -1145,20 +1163,7 @@ func (a App) buildStatusBar() string {
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] open  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
 		}
 	case FocusConversation:
-		if a.conversation.SearchMode() {
-			matchInfo := ""
-			if a.conversation.SearchMatchCount() > 0 {
-				matchInfo = fmt.Sprintf(" (%d/%d)", a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount())
-			} else if a.conversation.SearchQuery() != "" {
-				matchInfo = " (no matches)"
-			}
-			parts = append(parts, fmt.Sprintf("/ %s_%s  │  [n/N] navigate  [Esc/Enter] close", a.conversation.SearchQuery(), matchInfo))
-		} else if a.conversation.SearchMatchCount() > 0 {
-			parts = append(parts, fmt.Sprintf("[n/N] navigate  (%d/%d: %q)  │  [/] new search",
-				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery()))
-		} else {
-			parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search")
-		}
+		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search")
 	case FocusMetadata:
 		parts = append(parts, "[[] ideas  []] sessions  [T] tags")
 	}
