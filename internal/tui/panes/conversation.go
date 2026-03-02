@@ -2,6 +2,7 @@ package panes
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -193,6 +194,11 @@ func renderMarkdownCached(r *glamour.TermRenderer, text string) (result string) 
 	}
 	return out
 }
+// ansiEscape strips ANSI terminal escape codes from s.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
 
 // renderRoleHeader renders a styled header line for a message role.
 func renderRoleHeader(role string) string {
@@ -225,15 +231,22 @@ func (c *ConversationPane) renderContent() string {
 				sb.WriteString(rendered)
 				hasRenderable = true
 
-			case model.PartTypeTool:
-				status := part.ToolStatus
-				if status == "" {
-					status = "running"
+case model.PartTypeTool:
+			status := part.ToolStatus
+			if status == "" {
+				status = "running"
+			}
+			line := fmt.Sprintf("[⚙ %s] ── %s ──", part.ToolName, status)
+			sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
+			sb.WriteString("\n")
+			if part.ToolOutput != "" {
+				out := stripANSI(part.ToolOutput)
+				if len(out) > 2000 {
+					out = out[:2000] + "\n... [truncated]"
 				}
-				line := fmt.Sprintf("[⚙ %s] ── %s ──", part.ToolName, status)
-				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
+				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(out))
 				sb.WriteString("\n")
-
+			}
 			case model.PartTypeReasoning:
 				line := "[🧠 Reasoning] ── (hidden) ──"
 				sb.WriteString(lipgloss.NewStyle().Faint(true).Italic(true).Render(line))

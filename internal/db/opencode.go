@@ -236,6 +236,7 @@ func parsePart(partID, dataJSON string) *model.Part {
 			Tool  string `json:"tool"`
 			State struct {
 				Status string `json:"status"`
+				Output string `json:"output"`
 			} `json:"state"`
 		}
 		if err := json.Unmarshal([]byte(dataJSON), &p); err != nil {
@@ -246,6 +247,7 @@ func parsePart(partID, dataJSON string) *model.Part {
 			Type:       model.PartTypeTool,
 			ToolName:   p.Tool,
 			ToolStatus: p.State.Status,
+			ToolOutput: p.State.Output,
 		}
 
 	case "reasoning":

@@ -124,3 +124,51 @@ func TestConversationFilePartNoBase64(t *testing.T) {
 		t.Error("file part should display filename")
 	}
 }
+func TestConversationToolOutputRendered(t *testing.T) {
+	messages := []model.Message{
+		{
+			ID:   "m1",
+			Role: "assistant",
+			Parts: []model.Part{
+				{
+					Type:       model.PartTypeTool,
+					ToolName:   "bash",
+					ToolStatus: "completed",
+					ToolOutput: "total 42\ndrwxr-xr-x  5 user staff 160B Jan 01 00:00 .",
+				},
+			},
+		},
+	}
+	cp := panes.NewConversationPane(120, 40)
+	cp.SetMessages(messages)
+	view := cp.View()
+	if !strings.Contains(view, "total 42") {
+		t.Errorf("tool output should be rendered in view, got: %q", view)
+	}
+	if !strings.Contains(view, "bash") {
+		t.Errorf("tool name should still appear in view, got: %q", view)
+	}
+}
+func TestConversationToolOutputTruncated(t *testing.T) {
+	longOutput := strings.Repeat("a", 3000)
+	messages := []model.Message{
+		{
+			ID:   "m1",
+			Role: "assistant",
+			Parts: []model.Part{
+				{
+					Type:       model.PartTypeTool,
+					ToolName:   "bash",
+					ToolStatus: "completed",
+					ToolOutput: longOutput,
+				},
+			},
+		},
+	}
+	cp := panes.NewConversationPane(120, 40)
+	cp.SetMessages(messages)
+	view := cp.View()
+	if !strings.Contains(view, "[truncated]") {
+		t.Errorf("output over 2000 chars should be truncated, got len=%d", len(view))
+	}
+}
