@@ -103,7 +103,7 @@ type App struct {
 func NewApp(opencodeDB, managerDB *sql.DB) App {
 	a := App{
 		focus:         FocusSessionList,
-		activeTab:     TabIdeas,
+		activeTab:     TabSessions,
 		sessionTags:   make(map[string][]string),
 		opencodeDB:    opencodeDB,
 		managerDB:     managerDB,
@@ -459,7 +459,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			a.searchMode = false
-			a.searchQuery = ""
+			// keep searchQuery — user exits typing but filter stays active
 			a.applyFilters()
 			return a, nil
 		case "backspace":
@@ -479,6 +479,13 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "ctrl+c", KeyQuit:
 		return a, tea.Quit
+
+	case "esc":
+		if a.searchQuery != "" {
+			a.searchQuery = ""
+			a.applyFilters()
+		}
+		return a, nil
 
 	case KeyRefresh:
 		a.err = ""
@@ -528,7 +535,6 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case KeySearch:
 		a.searchMode = true
-		a.searchQuery = ""
 		return a, nil
 
 	case "tab":
@@ -919,7 +925,7 @@ func (a *App) applyFilters() {
 		sessions = filtered
 	}
 	// Apply search filter
-	if a.searchMode && a.searchQuery != "" {
+	if a.searchQuery != "" {
 		sessions = filterSessionsByTitle(sessions, a.searchQuery)
 	}
 	// Build tags subset
@@ -977,6 +983,9 @@ func (a App) buildStatusBar() string {
 	if a.searchMode {
 		searchBar := fmt.Sprintf("Search: %s_  │  Searching titles only  │  [Esc] cancel", a.searchQuery)
 		return StatusBarStyle.Render(searchBar)
+	} else if a.searchQuery != "" {
+		filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.searchQuery)
+		return StatusBarStyle.Render(filterBar)
 	}
 
 	var parts []string
