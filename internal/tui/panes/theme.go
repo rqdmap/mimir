@@ -49,10 +49,12 @@ var GruvboxTheme = Theme{
 }
 
 func ThemeByName(name string) Theme {
-	if name == "gruvbox" {
+	switch name {
+	case "default":
+		return DefaultTheme
+	default:
 		return GruvboxTheme
 	}
-	return DefaultTheme
 }
 
 var gruvboxStyleJSON = []byte(`{
