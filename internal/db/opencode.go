@@ -164,7 +164,13 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		        ELSE NULL
 		    END AS text_content,
 		    CASE JSON_EXTRACT(p.data, '$.type')
-		        WHEN 'tool' THEN p.data
+		        WHEN 'tool' THEN json_object(
+		            'tool', JSON_EXTRACT(p.data, '$.tool'),
+		            'state', json_object(
+		                'status', JSON_EXTRACT(p.data, '$.state.status'),
+		                'output', SUBSTR(COALESCE(JSON_EXTRACT(p.data, '$.state.output'), ''), 1, 4000)
+		            )
+		        )
 		        ELSE NULL
 		    END AS tool_data,
 		    CASE JSON_EXTRACT(p.data, '$.type')

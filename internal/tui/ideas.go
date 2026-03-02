@@ -38,6 +38,7 @@ type IdeasView struct {
 	deleteTarget  string
 	renderer      *glamour.TermRenderer
 	rendererWidth int
+	glamourStyle  string
 }
 
 type IdeaItem struct {
@@ -64,23 +65,22 @@ func (i IdeaItem) Description() string {
 func (i IdeaItem) FilterValue() string { return i.Idea.Content }
 
 // newRendererCmd creates a glamour renderer asynchronously so the UI thread is never blocked.
-func newRendererCmd(width int) tea.Cmd {
+func newRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
 		r, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle(style),
 			glamour.WithWordWrap(width),
 		)
 		return ideaRendererReadyMsg{renderer: r, rendererWidth: width}
 	}
 }
 
-func NewIdeasView(width, height int) IdeasView {
+func NewIdeasView(width, height int, glamourStyle string) IdeasView {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Idea Notebook"
 	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
 	l.DisableQuitKeybindings()
-	// Adjust list styles if needed
 	l.Styles.Title = lipgloss.NewStyle().
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("230")).
@@ -89,12 +89,12 @@ func NewIdeasView(width, height int) IdeasView {
 	vp := viewport.New(0, 0)
 
 	v := IdeasView{
-		list:    l,
-		preview: vp,
-		width:   width,
-		height:  height,
+		list:         l,
+		preview:      vp,
+		width:        width,
+		height:       height,
+		glamourStyle: glamourStyle,
 	}
-	// Initial sizing — renderer will be created asynchronously on first WindowSizeMsg.
 	v.SetSize(width, height)
 	return v
 }
@@ -125,7 +125,7 @@ func (v *IdeasView) SetSize(width, height int) tea.Cmd {
 
 	// Only recreate renderer when preview width changes — do it asynchronously.
 	if previewWidth > 0 && previewWidth != v.rendererWidth {
-		return newRendererCmd(previewWidth)
+		return newRendererCmd(previewWidth, v.glamourStyle)
 	}
 	return v.renderPreviewCmd()
 }

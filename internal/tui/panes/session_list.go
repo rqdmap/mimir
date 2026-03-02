@@ -80,9 +80,8 @@ func NewSessionList(width, height int) SessionList {
 	return s
 }
 
-// SetSessions updates the displayed sessions and clears the loading state.
+// SetSessions updates the displayed sessions.
 func (s *SessionList) SetSessions(sessions []model.Session, tags map[string][]string) {
-	s.loading = false // loading done once sessions are provided
 	items := make([]list.Item, len(sessions))
 	for i, sess := range sessions {
 		t := []string{}

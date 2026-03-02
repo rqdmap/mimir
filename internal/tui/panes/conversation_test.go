@@ -40,7 +40,7 @@ func TestConversationRenderNoPanic(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(120, 40)
+	cp := panes.NewConversationPane(120, 40, "dark")
 	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
@@ -51,7 +51,7 @@ func TestConversationRenderNoPanic(t *testing.T) {
 }
 
 func TestConversationEmptyState(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	view := cp.View()
 	if !strings.Contains(view, "Select a session") {
 		t.Errorf("empty pane should show 'Select a session' message, got: %q", view)
@@ -70,7 +70,7 @@ func TestConversationToolOnlySession(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(100, 30)
+	cp := panes.NewConversationPane(100, 30, "dark")
 	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
@@ -83,7 +83,7 @@ func TestConversationToolOnlySession(t *testing.T) {
 }
 
 func TestConversationFocusStyleChange(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	cp.SetFocused(false)
 	unfocused := cp.View()
 	if unfocused == "" {
@@ -98,7 +98,7 @@ func TestConversationFocusStyleChange(t *testing.T) {
 }
 
 func TestConversationSetSize(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	cp.SetSize(120, 40)
 	view := cp.View()
 	if view == "" {
@@ -117,7 +117,7 @@ func TestConversationFilePartNoBase64(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(100, 30)
+	cp := panes.NewConversationPane(100, 30, "dark")
 	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
@@ -144,7 +144,7 @@ func TestConversationToolOutputRendered(t *testing.T) {
 			},
 		},
 	}
-	cp := panes.NewConversationPane(120, 40)
+	cp := panes.NewConversationPane(120, 40, "dark")
 	cp = applySetMessages(cp, messages)
 	view := cp.View()
 	if !strings.Contains(view, "total 42") {
@@ -171,7 +171,7 @@ func TestConversationToolOutputTruncated(t *testing.T) {
 			},
 		},
 	}
-	cp := panes.NewConversationPane(120, 40)
+	cp := panes.NewConversationPane(120, 40, "dark")
 	cp = applySetMessages(cp, messages)
 	view := cp.View()
 	if !strings.Contains(view, "[truncated]") {
@@ -184,7 +184,7 @@ func TestConversationSessionIDGuard(t *testing.T) {
 		{ID: "m1", Role: "user", Parts: []model.Part{{Type: model.PartTypeText, Text: "hello"}}},
 	}
 
-	cp := panes.NewConversationPane(120, 40)
+	cp := panes.NewConversationPane(120, 40, "dark")
 	cmd := cp.SetMessages(messages, "session-A")
 	if cmd == nil {
 		t.Fatal("SetMessages with non-empty messages must return a Cmd")
@@ -205,7 +205,7 @@ func TestConversationSessionIDGuard(t *testing.T) {
 }
 
 func TestConversationSetMessagesNilReturnsNilCmd(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	var cmd tea.Cmd = cp.SetMessages(nil, "")
 	if cmd != nil {
 		t.Error("SetMessages(nil) must return nil Cmd")

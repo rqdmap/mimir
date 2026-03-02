@@ -96,12 +96,13 @@ type App struct {
 	totalCount    int  // total session count (from COUNT query)
 	hideSubAgents bool // true = hide sessions with parent_id != ""
 
-	showHelp  bool
-	activeTab AppTab
+	showHelp     bool
+	activeTab    AppTab
+	glamourStyle string
 }
 
 // NewApp creates an App with both databases wired in.
-func NewApp(opencodeDB, managerDB *sql.DB) App {
+func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 	a := App{
 		focus:         FocusSessionList,
 		activeTab:     TabIdeas,
@@ -110,6 +111,7 @@ func NewApp(opencodeDB, managerDB *sql.DB) App {
 		managerDB:     managerDB,
 		loading:       true,
 		hideSubAgents: true,
+		glamourStyle:  glamourStyle,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -119,9 +121,9 @@ func NewApp(opencodeDB, managerDB *sql.DB) App {
 
 	// Initialise panes with zero size; recalcLayout will size them on first WindowSizeMsg.
 	a.sessionList = panes.NewSessionList(0, 0)
-	a.conversation = panes.NewConversationPane(0, 0)
+	a.conversation = panes.NewConversationPane(0, 0, glamourStyle)
 	a.metadata = panes.NewMetadataPane(0, 0)
-	a.ideasView = NewIdeasView(0, 0)
+	a.ideasView = NewIdeasView(0, 0, glamourStyle)
 	a.inputMode = NewInputMode(0, 0)
 	a.tagFilter = NewTagFilterView(0, 0)
 
@@ -760,14 +762,26 @@ func (a App) startProgressiveLoad() tea.Cmd {
 		if opencodeDB == nil {
 			return errMsg{err: "opencode.db not available"}
 		}
-		total, err := db.CountSessions(opencodeDB)
-		if err != nil {
-			return errMsg{err: err.Error()}
-		}
 		const batchSize = 100
-		sessions, err := db.ListSessionsPage(opencodeDB, batchSize, 0)
-		if err != nil {
-			return errMsg{err: err.Error()}
+		var total int
+		var sessions []model.Session
+		var totalErr, sessErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			total, totalErr = db.CountSessions(opencodeDB)
+		}()
+		go func() {
+			defer wg.Done()
+			sessions, sessErr = db.ListSessionsPage(opencodeDB, batchSize, 0)
+		}()
+		wg.Wait()
+		if totalErr != nil {
+			return errMsg{err: totalErr.Error()}
+		}
+		if sessErr != nil {
+			return errMsg{err: sessErr.Error()}
 		}
 		tags := make(map[string][]string)
 		if managerDB != nil {

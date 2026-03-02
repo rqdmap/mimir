@@ -25,10 +25,10 @@ type AsyncConvRenderMsg struct {
 	Content   string
 }
 
-func newConvRendererCmd(width int) tea.Cmd {
+func newConvRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
 		r, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle(style),
 			glamour.WithWordWrap(width),
 		)
 		return ConvRendererReadyMsg{Renderer: r, Width: width}
@@ -47,18 +47,20 @@ type ConversationPane struct {
 	renderer         *glamour.TermRenderer
 	rendererWidth    int
 	currentSessionID string
+	glamourStyle     string
 }
 
-func NewConversationPane(width, height int) ConversationPane {
+func NewConversationPane(width, height int, glamourStyle string) ConversationPane {
 	vp := viewport.New(width-2, height-4)
 	vp.SetContent("Select a session from the list to view the conversation.")
 	return ConversationPane{
-		viewport: vp,
-		messages: nil,
-		focused:  false,
-		width:    width,
-		height:   height,
-		ready:    true,
+		viewport:     vp,
+		messages:     nil,
+		focused:      false,
+		width:        width,
+		height:       height,
+		ready:        true,
+		glamourStyle: glamourStyle,
 	}
 }
 
@@ -96,7 +98,7 @@ func (c *ConversationPane) SetSize(width, height int) tea.Cmd {
 		inner = 80
 	}
 	if inner != c.rendererWidth {
-		return newConvRendererCmd(inner)
+		return newConvRendererCmd(inner, c.glamourStyle)
 	}
 	return nil
 }
@@ -126,8 +128,19 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 	case ConvRendererReadyMsg:
 		c.renderer = msg.Renderer
 		c.rendererWidth = msg.Width
-		c.viewport.SetContent(c.renderContent())
-		return c, nil
+		if len(c.messages) == 0 {
+			// No messages loaded yet — nothing to re-render.
+			return c, nil
+		}
+		// Re-render asynchronously with the new renderer to avoid blocking the
+		// main goroutine (glamour rendering of long sessions takes 100ms–5s).
+		messages := c.messages
+		sessionID := c.currentSessionID
+		renderer := msg.Renderer
+		return c, func() tea.Msg {
+			content := renderContentStandalone(messages, renderer)
+			return AsyncConvRenderMsg{SessionID: sessionID, Content: content}
+		}
 	case AsyncConvRenderMsg:
 		if msg.SessionID == c.currentSessionID {
 			c.viewport.SetContent(msg.Content)
@@ -190,7 +203,7 @@ func renderMarkdown(text string, width int) (result string) {
 		width = 80
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -273,7 +286,11 @@ func renderContentStandalone(messages []model.Message, renderer *glamour.TermRen
 				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
 				sb.WriteString("\n")
 				if part.ToolOutput != "" {
-					out := stripANSI(part.ToolOutput)
+					out := part.ToolOutput
+					if len(out) > 4000 {
+						out = out[:4000]
+					}
+					out = stripANSI(out)
 					if len(out) > 2000 {
 						out = out[:2000] + "\n... [truncated]"
 					}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestIdeasViewEmpty(t *testing.T) {
-	v := NewIdeasView(80, 24)
+	v := NewIdeasView(80, 24, "dark")
 	if len(v.ideas) != 0 {
 		t.Errorf("expected 0 ideas, got %d", len(v.ideas))
 	}
@@ -29,7 +29,7 @@ func TestIdeasViewWithData(t *testing.T) {
 		{ID: "1", Content: "Idea 1", TimeCreated: time.Now().UnixMilli()},
 		{ID: "2", Content: "Idea 2", TimeCreated: time.Now().UnixMilli()},
 	}
-	v := NewIdeasView(80, 24)
+	v := NewIdeasView(80, 24, "dark")
 	v.SetIdeas(ideas)
 
 	if len(v.ideas) != 2 {
@@ -63,7 +63,7 @@ func TestIdeasViewDelete(t *testing.T) {
 	ideas := []model.Idea{
 		{ID: "1", Content: "Idea to delete", TimeCreated: time.Now().UnixMilli()},
 	}
-	v := NewIdeasView(80, 24)
+	v := NewIdeasView(80, 24, "dark")
 	v.SetIdeas(ideas)
 
 	// Send 'd'
@@ -113,7 +113,7 @@ func TestIdeasViewEdit(t *testing.T) {
 	ideas := []model.Idea{
 		{ID: "1", Content: "Idea to edit", TimeCreated: time.Now().UnixMilli()},
 	}
-	v := NewIdeasView(80, 24)
+	v := NewIdeasView(80, 24, "dark")
 	v.SetIdeas(ideas)
 
 	// Send 'e'
