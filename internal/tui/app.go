@@ -30,7 +30,6 @@ const (
 	TabIdeas
 )
 
-const sessionBatchSize = 100
 
 // --- Async message types ---
 
@@ -54,15 +53,10 @@ type sessionIdeasRefreshedMsg struct {
 	ideas []model.Idea
 }
 
-type sessionsFirstPageMsg struct {
-	sessions    []model.Session
-	sessionTags map[string][]string
-	total       int
-}
-
-type sessionsBatchMsg struct {
-	sessions []model.Session
-	done     bool
+type oneSessionTagsRefreshedMsg struct {
+	sessionID string
+	tags      []string
+	meta      model.SessionMeta
 }
 
 // App is the top-level BubbleTea model.
@@ -90,10 +84,8 @@ type App struct {
 	searchMode  bool
 	searchQuery string
 
-	loading          bool // true while initial sessions are loading
-	sessionLoadTotal int
-	sessionLoadDone  int
-	hideSubAgents    bool // true = hide sessions with parent_id != ""
+	loading       bool // true while initial sessions are loading
+	hideSubAgents bool // true = hide sessions with parent_id != ""
 
 	showHelp  bool
 	activeTab AppTab
@@ -166,33 +158,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Async result messages ---
 
-	case sessionsFirstPageMsg:
-		a.sessions = msg.sessions
-		a.sessionTags = msg.sessionTags
-		a.sessionLoadTotal = msg.total
-		a.sessionLoadDone = len(msg.sessions)
-		a.loading = false
-		a.sessionList.SetLoading(false)
-		a.applyFilters()
-		a.err = ""
-		if a.sessionLoadDone < a.sessionLoadTotal {
-			return a, a.loadSessionsBatch(len(msg.sessions))
-		}
-		a.sessionLoadTotal = 0
-		a.sessionLoadDone = 0
-		return a, nil
-
-	case sessionsBatchMsg:
-		a.sessions = append(a.sessions, msg.sessions...)
-		a.sessionLoadDone = len(a.sessions)
-		if msg.done {
-			a.applyFilters()
-			a.sessionLoadTotal = 0
-			a.sessionLoadDone = 0
-			return a, nil
-		}
-		return a, a.loadSessionsBatch(len(a.sessions))
-
 	case sessionsRefreshedMsg:
 		a.sessions = msg.sessions
 		a.sessionTags = msg.sessionTags
@@ -231,7 +196,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, tag := range msg.Tags {
 				_ = db.AddSessionTag(a.managerDB, msg.SessionID, tag)
 			}
-			cmds = append(cmds, a.reloadSessionTagsAndList(msg.SessionID))
+			cmds = append(cmds, a.reloadOneSessionTags(msg.SessionID))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -334,7 +299,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RemoveTagMsg:
 		if a.managerDB != nil {
 			_ = db.RemoveSessionTag(a.managerDB, msg.SessionID, msg.TagName)
-			cmds = append(cmds, a.reloadSessionTagsAndList(msg.SessionID))
+			cmds = append(cmds, a.reloadOneSessionTags(msg.SessionID))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -342,12 +307,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.metadata.SetSessionMeta(msg.meta)
 		return a, nil
 
-	case sessionAndListRefreshedMsg:
-		a.sessions = msg.sessions
-		a.sessionTags = msg.sessionTags
-		a.applyFilters()
+	case oneSessionTagsRefreshedMsg:
+		a.sessionTags[msg.sessionID] = msg.tags
 		a.metadata.SetSessionMeta(msg.meta)
-		a.err = ""
+		a.applyFilters()
 		return a, nil
 
 	}
@@ -494,10 +457,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "[":
 		a.activeTab = TabIdeas
 		a.setFocus(FocusSessionList)
-		if a.managerDB != nil {
-			return a, a.loadIdeas()
-		}
 		return a, nil
+
 
 	case "]":
 		a.activeTab = TabSessions
@@ -507,10 +468,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case KeyIdeas:
 		a.activeTab = TabIdeas
 		a.setFocus(FocusSessionList)
-		if a.managerDB != nil {
-			return a, a.loadIdeas()
-		}
 		return a, nil
+
 
 	case "T":
 		// Open tag filter overlay
@@ -726,16 +685,11 @@ func (a App) loadInitialSessions() tea.Cmd {
 		var sessions []model.Session
 		var tags map[string][]string
 		var sessErr error
-		var total int
 		var wg sync.WaitGroup
-		wg.Add(3)
+		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			sessions, sessErr = db.ListSessionsPage(opencodeDB, 50, 0)
-		}()
-		go func() {
-			defer wg.Done()
-			total, _ = db.CountSessions(opencodeDB)
+			sessions, sessErr = db.ListSessions(opencodeDB)
 		}()
 		go func() {
 			defer wg.Done()
@@ -753,24 +707,7 @@ func (a App) loadInitialSessions() tea.Cmd {
 		if sessErr != nil {
 			return errMsg{err: sessErr.Error()}
 		}
-		return sessionsFirstPageMsg{sessions: sessions, sessionTags: tags, total: total}
-	}
-}
-
-func (a App) loadSessionsBatch(offset int) tea.Cmd {
-	opencodeDB := a.opencodeDB
-	return func() tea.Msg {
-		if opencodeDB == nil {
-			return nil
-		}
-		sessions, err := db.ListSessionsPage(opencodeDB, sessionBatchSize, offset)
-		if err != nil {
-			return errMsg{err: err.Error()}
-		}
-		return sessionsBatchMsg{
-			sessions: sessions,
-			done:     len(sessions) < sessionBatchSize,
-		}
+		return sessionsRefreshedMsg{sessions: sessions, sessionTags: tags}
 	}
 }
 
@@ -849,29 +786,17 @@ func (a App) reloadSessionIdeas(sessionID string) tea.Cmd {
 	}
 }
 
-// reloadSessionTagsAndList reloads session tags for one session and refreshes the full session list tags.
-func (a App) reloadSessionTagsAndList(sessionID string) tea.Cmd {
+// reloadOneSessionTags reloads tags for a single session in-place and updates the metadata pane.
+// Avoids a full session list reload on every tag add/remove.
+func (a App) reloadOneSessionTags(sessionID string) tea.Cmd {
 	managerDB := a.managerDB
-	opencodeDB := a.opencodeDB
 	return func() tea.Msg {
 		if managerDB == nil {
 			return nil
 		}
-		if opencodeDB == nil {
-			return errMsg{err: "opencode.db not available"}
-		}
-		sessions, err := db.ListSessions(opencodeDB)
-		if err != nil {
-			return errMsg{err: err.Error()}
-		}
-		tags, _ := db.ListAllSessionTags(managerDB)
-		// Also reload the meta for the updated session so metadata pane reflects new tags.
+		tags, _ := db.GetSessionTags(managerDB, sessionID)
 		meta, _ := db.GetSessionMeta(managerDB, sessionID)
-		return sessionAndListRefreshedMsg{
-			sessions:    sessions,
-			sessionTags: tags,
-			meta:        meta,
-		}
+		return oneSessionTagsRefreshedMsg{sessionID: sessionID, tags: tags, meta: meta}
 	}
 }
 
@@ -938,11 +863,6 @@ type sessionMetaRefreshedMsg struct {
 	meta model.SessionMeta
 }
 
-type sessionAndListRefreshedMsg struct {
-	sessions    []model.Session
-	sessionTags map[string][]string
-	meta        model.SessionMeta
-}
 
 // --- View helpers ---
 
@@ -960,18 +880,6 @@ func (a App) renderTabHeader(active AppTab) string {
 	return ideas + "  " + sess
 }
 
-func makeProgressBar(done, total, barWidth int) string {
-	if total <= 0 {
-		return ""
-	}
-	if done > total {
-		done = total
-	}
-	pct := float64(done) / float64(total)
-	filled := int(pct * float64(barWidth))
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-	return fmt.Sprintf("Loading %d/%d [%s]", done, total, bar)
-}
 
 func (a App) buildStatusBar() string {
 	if a.searchMode {
@@ -981,9 +889,6 @@ func (a App) buildStatusBar() string {
 
 	var parts []string
 
-	if pb := makeProgressBar(a.sessionLoadDone, a.sessionLoadTotal, 12); pb != "" {
-		parts = append(parts, pb)
-	}
 
 	// Focus hint
 	switch a.focus {

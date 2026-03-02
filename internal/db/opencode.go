@@ -22,7 +22,7 @@ func OpenOpencodeDB() (*sql.DB, error) {
 	}
 	dbPath := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 	// MUST use ?mode=ro to enforce read-only
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL", dbPath)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_cache_size=-65536&mmap_size=268435456", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
