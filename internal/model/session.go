@@ -26,6 +26,7 @@ type Part struct {
 	Text       string
 	ToolName   string
 	ToolStatus string
+	ToolOutput string
 	Filename   string
 	MimeType   string
 	Reasoning  string
