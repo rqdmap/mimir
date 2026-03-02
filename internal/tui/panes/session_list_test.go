@@ -18,7 +18,7 @@ func TestSessionListRender(t *testing.T) {
 	}
 
 	// Initialize the component
-	sl := panes.NewSessionList(80, 30)
+	sl := panes.NewSessionList(80, 30, panes.DefaultTheme)
 
 	// Set sessions with some tags
 	sl.SetSessions(sessions, map[string][]string{

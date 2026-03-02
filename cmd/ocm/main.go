@@ -4,13 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/local/oc-manager/internal/db"
 	tui "github.com/local/oc-manager/internal/tui"
-	"github.com/muesli/termenv"
+	"github.com/local/oc-manager/internal/tui/panes"
 )
 
 func main() {
@@ -48,20 +46,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	glamourStyle := os.Getenv("GLAMOUR_STYLE")
-	if glamourStyle == "" || glamourStyle == "auto" {
-		if termenv.HasDarkBackground() {
-			glamourStyle = "dark"
-		} else {
-			glamourStyle = "light"
-		}
-	} else if strings.HasPrefix(glamourStyle, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			glamourStyle = filepath.Join(home, glamourStyle[2:])
-		}
-	}
+	theme := panes.ThemeByName(os.Getenv("MIMIR_THEME"))
 
-	app := tui.NewApp(opencodeDB, managerDB, glamourStyle)
+	app := tui.NewApp(opencodeDB, managerDB, theme)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

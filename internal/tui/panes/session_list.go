@@ -50,15 +50,15 @@ type SessionList struct {
 	loading bool
 	Width   int
 	Height  int
+	theme   Theme
 }
 
 // NewSessionList creates a new SessionList
-func NewSessionList(width, height int) SessionList {
+func NewSessionList(width, height int, theme Theme) SessionList {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
-	// Minimal custom styling for selection
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("205")).BorderForeground(lipgloss.Color("205"))
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(lipgloss.Color("205")).BorderForeground(lipgloss.Color("205"))
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(theme.Accent).BorderForeground(theme.Accent)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(theme.Accent).BorderForeground(theme.Accent)
 
 	l := list.New([]list.Item{}, delegate, width, height)
 	l.SetShowStatusBar(false)
@@ -73,6 +73,7 @@ func NewSessionList(width, height int) SessionList {
 		loading: true,
 		Width:   width,
 		Height:  height,
+		theme:   theme,
 	}
 	// Apply sizing logic immediately
 	s.SetSize(width, height)
@@ -183,9 +184,9 @@ func (s SessionList) Update(msg tea.Msg) (SessionList, tea.Cmd) {
 
 // View renders the pane
 func (s SessionList) View() string {
-	borderColor := lipgloss.Color("240") // Gray
+	borderColor := s.theme.BorderUnfocused
 	if s.focused {
-		borderColor = lipgloss.Color("205") // Pink/Purple
+		borderColor = s.theme.BorderFocused
 	}
 
 	style := lipgloss.NewStyle().

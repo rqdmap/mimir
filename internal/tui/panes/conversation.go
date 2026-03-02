@@ -25,10 +25,10 @@ type AsyncConvRenderMsg struct {
 	Content   string
 }
 
-func newConvRendererCmd(width int, style string) tea.Cmd {
+func newConvRendererCmd(width int, theme Theme) tea.Cmd {
 	return func() tea.Msg {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithStylePath(style),
+			theme.GlamourOption(),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
@@ -53,7 +53,7 @@ type ConversationPane struct {
 	renderer         *glamour.TermRenderer
 	rendererWidth    int
 	currentSessionID string
-	glamourStyle     string
+	theme            Theme
 
 	rawLines   []string
 	plainLines []string
@@ -64,17 +64,17 @@ type ConversationPane struct {
 	convSearchIdx     int
 }
 
-func NewConversationPane(width, height int, glamourStyle string) ConversationPane {
+func NewConversationPane(width, height int, theme Theme) ConversationPane {
 	vp := viewport.New(width-2, height-4)
 	vp.SetContent("Select a session from the list to view the conversation.")
 	return ConversationPane{
-		viewport:     vp,
-		messages:     nil,
-		focused:      false,
-		width:        width,
-		height:       height,
-		ready:        true,
-		glamourStyle: glamourStyle,
+		viewport: vp,
+		messages: nil,
+		focused:  false,
+		width:    width,
+		height:   height,
+		ready:    true,
+		theme:    theme,
 	}
 }
 
@@ -127,7 +127,7 @@ func (c *ConversationPane) SetSize(width, height int) tea.Cmd {
 		inner = 80
 	}
 	if inner != c.rendererWidth {
-		return newConvRendererCmd(inner, c.glamourStyle)
+		return newConvRendererCmd(inner, c.theme)
 	}
 	return nil
 }
@@ -250,9 +250,9 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 
 // View renders the pane including border and title.
 func (c ConversationPane) View() string {
-	borderColor := lipgloss.Color("240") // gray when unfocused
+	borderColor := c.theme.BorderUnfocused
 	if c.focused {
-		borderColor = lipgloss.Color("#7D56F4") // purple when focused
+		borderColor = c.theme.BorderFocused
 	}
 
 	title := lipgloss.NewStyle().

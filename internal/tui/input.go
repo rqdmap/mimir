@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/local/oc-manager/internal/tui/panes"
 )
 
 type InputTarget int
@@ -46,9 +47,10 @@ type InputMode struct {
 	active bool
 	width  int
 	height int
+	theme  panes.Theme
 }
 
-func NewInputMode(width, height int) InputMode {
+func NewInputMode(width, height int, theme panes.Theme) InputMode {
 	ti := textinput.New()
 	ti.Width = 56
 
@@ -57,6 +59,7 @@ func NewInputMode(width, height int) InputMode {
 		textinput: ti,
 		width:     width,
 		height:    height,
+		theme:     theme,
 	}
 }
 
@@ -286,16 +289,16 @@ func (im InputMode) View() string {
 
 	borderStyle := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("62")).
+		BorderForeground(im.theme.AccentBg).
 		Width(boxWidth).
 		Padding(1, 2)
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("252"))
+		Foreground(im.theme.TextNormal)
 
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	labelStyle := lipgloss.NewStyle().Foreground(im.theme.TextNormal)
+	hintStyle := lipgloss.NewStyle().Foreground(im.theme.TextMuted).Italic(true)
 
 	var content string
 
@@ -307,7 +310,7 @@ func (im InputMode) View() string {
 			prompt = labelStyle.Render("Edit idea content:")
 		} else if im.sessionID != "" {
 			title = titleStyle.Render("Capture Idea")
-			sessionLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render(im.sessionTitle)
+			sessionLabel := lipgloss.NewStyle().Foreground(im.theme.BorderFocused).Bold(true).Render(im.sessionTitle)
 			prompt = labelStyle.Render("Linked to: ") + sessionLabel
 		} else {
 			title = titleStyle.Render("Capture Idea")
@@ -325,10 +328,10 @@ func (im InputMode) View() string {
 
 	case InputTargetTag:
 		title := titleStyle.Render("Add Tags")
-		sessionLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Render(im.sessionTitle)
+		sessionLabel := lipgloss.NewStyle().Foreground(im.theme.BorderFocused).Bold(true).Render(im.sessionTitle)
 
-		selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Bold(true)
-		normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		selectedStyle := lipgloss.NewStyle().Foreground(im.theme.Accent).Bold(true)
+		normalStyle := lipgloss.NewStyle().Foreground(im.theme.TextNormal)
 
 		var tagLines []string
 		if len(im.workingTags) == 0 {

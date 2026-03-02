@@ -9,7 +9,7 @@ import (
 )
 
 func TestMetadataPaneNoSession(t *testing.T) {
-	mp := panes.NewMetadataPane(40, 30)
+	mp := panes.NewMetadataPane(40, 30, panes.DefaultTheme)
 	view := mp.View()
 	if view == "" {
 		t.Fatal("view must not be empty")
@@ -22,7 +22,7 @@ func TestMetadataPaneNoSession(t *testing.T) {
 }
 
 func TestMetadataPaneWithData(t *testing.T) {
-	mp := panes.NewMetadataPane(40, 30)
+	mp := panes.NewMetadataPane(40, 30, panes.DefaultTheme)
 	mp.SetSessionMeta(model.SessionMeta{
 		SessionID: "test-id",
 		Note:      "This is my test note",

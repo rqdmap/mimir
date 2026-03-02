@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
+	"github.com/local/oc-manager/internal/tui/panes"
 )
 
 type TagFilterByNameMsg struct{ TagName string }
@@ -38,17 +39,18 @@ type TagsView struct {
 	list         list.Model
 	width        int
 	height       int
+	theme        panes.Theme
 }
 
-func NewTagsView(width, height int) TagsView {
+func NewTagsView(width, height int, theme panes.Theme) TagsView {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("#7D56F4")).
-		BorderForeground(lipgloss.Color("#7D56F4"))
+		Foreground(theme.Accent).
+		BorderForeground(theme.Accent)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(lipgloss.Color("#7D56F4")).
-		BorderForeground(lipgloss.Color("#7D56F4"))
+		Foreground(theme.Accent).
+		BorderForeground(theme.Accent)
 
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Tags"
@@ -57,8 +59,8 @@ func NewTagsView(width, height int) TagsView {
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
 	l.Styles.Title = lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("230")).
+		Background(theme.AccentBg).
+		Foreground(theme.AccentFg).
 		Padding(0, 1)
 
 	v := TagsView{
@@ -66,6 +68,7 @@ func NewTagsView(width, height int) TagsView {
 		width:  width,
 		height: height,
 		counts: make(map[string]int),
+		theme:  theme,
 	}
 	v.setListSize(width, height)
 	return v
@@ -137,7 +140,7 @@ func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 }
 
 func (v TagsView) View() string {
-	borderColor := lipgloss.Color("240")
+	borderColor := v.theme.BorderUnfocused
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

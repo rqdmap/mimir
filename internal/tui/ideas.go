@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
+	"github.com/local/oc-manager/internal/tui/panes"
 )
 
 // Messages
@@ -40,7 +41,7 @@ type IdeasView struct {
 	deleteTarget  string
 	renderer      *glamour.TermRenderer
 	rendererWidth int
-	glamourStyle  string
+	theme         panes.Theme
 }
 
 type IdeaItem struct {
@@ -66,11 +67,10 @@ func (i IdeaItem) Description() string {
 
 func (i IdeaItem) FilterValue() string { return i.Idea.Content }
 
-// newRendererCmd creates a glamour renderer asynchronously so the UI thread is never blocked.
-func newRendererCmd(width int, style string) tea.Cmd {
+func newRendererCmd(width int, theme panes.Theme) tea.Cmd {
 	return func() tea.Msg {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithStylePath(style),
+			theme.GlamourOption(),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
@@ -83,25 +83,25 @@ func newRendererCmd(width int, style string) tea.Cmd {
 	}
 }
 
-func NewIdeasView(width, height int, glamourStyle string) IdeasView {
+func NewIdeasView(width, height int, theme panes.Theme) IdeasView {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Idea Notebook"
 	l.SetShowHelp(false)
 	l.SetShowStatusBar(false)
 	l.DisableQuitKeybindings()
 	l.Styles.Title = lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
+		Background(theme.AccentBg).
+		Foreground(theme.AccentFg).
 		Padding(0, 1)
 
 	vp := viewport.New(0, 0)
 
 	v := IdeasView{
-		list:         l,
-		preview:      vp,
-		width:        width,
-		height:       height,
-		glamourStyle: glamourStyle,
+		list:    l,
+		preview: vp,
+		width:   width,
+		height:  height,
+		theme:   theme,
 	}
 	v.SetSize(width, height)
 	return v
@@ -145,7 +145,7 @@ func (v *IdeasView) SetSize(width, height int) tea.Cmd {
 
 	// Only recreate renderer when preview width changes — do it asynchronously.
 	if previewWidth > 0 && previewWidth != v.rendererWidth {
-		return newRendererCmd(previewWidth, v.glamourStyle)
+		return newRendererCmd(previewWidth, v.theme)
 	}
 	return v.renderPreviewCmd()
 }
@@ -284,7 +284,7 @@ func (v IdeasView) View() string {
 		Width(v.list.Width()).
 		Height(v.height).
 		Border(lipgloss.RoundedBorder(), false, true, false, false).
-		BorderForeground(lipgloss.Color("63")) // Purple-ish
+		BorderForeground(v.theme.BorderFocused)
 
 	previewStyle := lipgloss.NewStyle().
 		Width(v.width-v.list.Width()-2). // -2 for border
@@ -308,7 +308,7 @@ func (v IdeasView) viewEmpty() string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")).
+		BorderForeground(v.theme.BorderFocused).
 		Padding(1, 3).
 		Align(lipgloss.Center).
 		Width(50).

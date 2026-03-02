@@ -101,18 +101,18 @@ type App struct {
 	tagsSearchQuery  string
 	activeTagFilter  string
 
-	loading       bool // true while initial sessions are loading
-	loadedCount   int  // how many sessions have been loaded so far
-	totalCount    int  // total session count (from COUNT query)
-	hideSubAgents bool // true = hide sessions with parent_id != ""
+	loading       bool
+	loadedCount   int
+	totalCount    int
+	hideSubAgents bool
 
-	showHelp     bool
-	activeTab    AppTab
-	glamourStyle string
+	showHelp  bool
+	activeTab AppTab
+	theme     panes.Theme
 }
 
 // NewApp creates an App with both databases wired in.
-func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
+func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme) App {
 	a := App{
 		focus:         FocusSessionList,
 		activeTab:     TabIdeas,
@@ -121,7 +121,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 		managerDB:     managerDB,
 		loading:       true,
 		hideSubAgents: true,
-		glamourStyle:  glamourStyle,
+		theme:         theme,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -130,12 +130,12 @@ func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 	}
 
 	// Initialise panes with zero size; recalcLayout will size them on first WindowSizeMsg.
-	a.sessionList = panes.NewSessionList(0, 0)
-	a.conversation = panes.NewConversationPane(0, 0, glamourStyle)
-	a.metadata = panes.NewMetadataPane(0, 0)
-	a.ideasView = NewIdeasView(0, 0, glamourStyle)
-	a.inputMode = NewInputMode(0, 0)
-	a.tagsView = NewTagsView(0, 0)
+	a.sessionList = panes.NewSessionList(0, 0, theme)
+	a.conversation = panes.NewConversationPane(0, 0, theme)
+	a.metadata = panes.NewMetadataPane(0, 0, theme)
+	a.ideasView = NewIdeasView(0, 0, theme)
+	a.inputMode = NewInputMode(0, 0, theme)
+	a.tagsView = NewTagsView(0, 0, theme)
 
 	a.sessionList.SetFocused(true)
 	a.sessionList.SetLoading(true)
@@ -1060,8 +1060,8 @@ type sessionMetaRefreshedMsg struct {
 
 // renderTabHeader returns a 1-line tab header for the left pane.
 func (a App) renderTabHeader(active AppTab) string {
-	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Padding(0, 1)
-	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Padding(0, 1)
+	inactive := lipgloss.NewStyle().Foreground(a.theme.TextMuted).Padding(0, 1)
+	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(a.theme.TextNormal).Padding(0, 1)
 	sess := inactive.Render("Sessions")
 	ideas := inactive.Render("Ideas")
 	tags := inactive.Render("Tags")
@@ -1077,6 +1077,9 @@ func (a App) renderTabHeader(active AppTab) string {
 }
 
 func (a App) buildStatusBar() string {
+	statusStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted)
+	errStyle := lipgloss.NewStyle().Foreground(a.theme.ErrorText)
+
 	if a.searchMode {
 		var q string
 		var hint string
@@ -1092,7 +1095,7 @@ func (a App) buildStatusBar() string {
 			hint = "tags"
 		}
 		searchBar := fmt.Sprintf("Search: %s_  │  Filtering %s  │  [Esc] done", q, hint)
-		return StatusBarStyle.Render(searchBar)
+		return statusStyle.Render(searchBar)
 	}
 
 	if a.focus == FocusConversation && (a.conversation.SearchMode() || a.conversation.SearchMatchCount() > 0) {
@@ -1110,7 +1113,7 @@ func (a App) buildStatusBar() string {
 				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery()))
 		}
 		parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
-		return StatusBarStyle.Render(strings.Join(parts, "  │  "))
+		return statusStyle.Render(strings.Join(parts, "  │  "))
 	}
 
 	switch a.activeTab {
@@ -1124,24 +1127,24 @@ func (a App) buildStatusBar() string {
 		}
 		if len(filterParts) > 0 {
 			filterBar := strings.Join(filterParts, "  │  ") + "  │  [/] edit  [Esc] clear"
-			return StatusBarStyle.Render(filterBar)
+			return statusStyle.Render(filterBar)
 		}
 	case TabIdeas:
 		if a.ideasSearchQuery != "" {
 			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.ideasSearchQuery)
-			return StatusBarStyle.Render(filterBar)
+			return statusStyle.Render(filterBar)
 		}
 	case TabTags:
 		if a.tagsSearchQuery != "" {
 			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.tagsSearchQuery)
-			return StatusBarStyle.Render(filterBar)
+			return statusStyle.Render(filterBar)
 		}
 	}
 
 	if a.loading && a.totalCount > 0 {
-		bar := StatusBarStyle.Render(fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount))
+		bar := statusStyle.Render(fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount))
 		if a.err != "" {
-			return bar + ErrorStyle.Render("  ✗ "+a.err)
+			return bar + errStyle.Render("  ✗ "+a.err)
 		}
 		return bar
 	}
@@ -1171,11 +1174,10 @@ func (a App) buildStatusBar() string {
 	parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
 
 	statusText := strings.Join(parts, "  │  ")
-	bar := StatusBarStyle.Render(statusText)
+	bar := statusStyle.Render(statusText)
 
 	if a.err != "" {
-		errText := ErrorStyle.Render("  ✗ " + a.err)
-		return bar + errText
+		return bar + errStyle.Render("  ✗ "+a.err)
 	}
 
 	return bar
@@ -1217,10 +1219,10 @@ func (a App) overlayHelp(background string) string {
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")).
+		BorderForeground(a.theme.BorderFocused).
 		Padding(1, 3).
 		Width(56).
-		Render(HelpStyle.Render(helpText))
+		Render(lipgloss.NewStyle().Foreground(a.theme.TextMuted).Render(helpText))
 
 	_ = background // background string not layered — just show centered help
 	return lipgloss.Place(

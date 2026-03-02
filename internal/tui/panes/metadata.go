@@ -21,12 +21,14 @@ type MetadataPane struct {
 	sessionIdeas []model.Idea
 	ideaMode     bool
 	selectedIdea *model.Idea
+	theme        Theme
 }
 
-func NewMetadataPane(width, height int) MetadataPane {
+func NewMetadataPane(width, height int, theme Theme) MetadataPane {
 	return MetadataPane{
 		width:  width,
 		height: height,
+		theme:  theme,
 	}
 }
 
@@ -75,9 +77,9 @@ func (m MetadataPane) Update(msg tea.Msg) (MetadataPane, tea.Cmd) {
 }
 
 func (m MetadataPane) View() string {
-	borderColor := lipgloss.Color("240") // gray
+	borderColor := m.theme.BorderUnfocused
 	if m.focused {
-		borderColor = lipgloss.Color("57") // purple
+		borderColor = m.theme.BorderFocused
 	}
 
 	style := lipgloss.NewStyle().
@@ -92,18 +94,18 @@ func (m MetadataPane) View() string {
 	}
 
 	// Title
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Background(lipgloss.Color("235")).Padding(0, 1)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Background(m.theme.AccentBg).Padding(0, 1)
 	title := titleStyle.Render("Metadata")
 
 	// Sections
 	// Tags
-	tagHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render("Tags")
+	tagHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Tags")
 	var tagsView string
 	if len(m.meta.Tags) == 0 {
-		tagsView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No tags yet.")
+		tagsView = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("No tags yet.")
 	} else {
 		var renderedTags []string
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("●")
+		dot := lipgloss.NewStyle().Foreground(m.theme.Accent).Render("●")
 		for _, t := range m.meta.Tags {
 			renderedTags = append(renderedTags, fmt.Sprintf("%s %s", dot, t))
 		}
@@ -111,10 +113,10 @@ func (m MetadataPane) View() string {
 	}
 
 	// Session Ideas
-	ideasHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render("Session Ideas")
+	ideasHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Session Ideas")
 	var ideasView string
 	if len(m.sessionIdeas) == 0 {
-		ideasView = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("No ideas yet.")
+		ideasView = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("No ideas yet.")
 	} else {
 		var ideaLines []string
 		for _, idea := range m.sessionIdeas {
@@ -130,12 +132,12 @@ func (m MetadataPane) View() string {
 	// Selected Idea (if in idea mode)
 	var selectedIdeaSection string
 	if m.ideaMode && m.selectedIdea != nil {
-		sidHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render("Selected Idea")
+		sidHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Selected Idea")
 		content := m.selectedIdea.Content
 		if len(content) > 200 {
 			content = content[:200] + "..."
 		}
-		sidContent := lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("246")).Render(fmt.Sprintf("%q", content))
+		sidContent := lipgloss.NewStyle().Italic(true).Foreground(m.theme.TextMuted).Render(fmt.Sprintf("%q", content))
 
 		var sourceStr string
 		if m.selectedIdea.SourceSessionID != "" {
@@ -143,14 +145,14 @@ func (m MetadataPane) View() string {
 		} else {
 			sourceStr = "(no linked session)"
 		}
-		sidSource := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(sourceStr)
-		sidTime := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(time.UnixMilli(m.selectedIdea.TimeCreated).Format("Jan 02, 2006 15:04"))
+		sidSource := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(sourceStr)
+		sidTime := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(time.UnixMilli(m.selectedIdea.TimeCreated).Format("Jan 02, 2006 15:04"))
 
 		selectedIdeaSection = "\n" + sidHeader + "\n" + sidContent + "\n" + sidSource + "\n" + sidTime
 	}
 
 	// Stats
-	statsHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("─── Stats ───")
+	statsHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Stats ───")
 	statsView := fmt.Sprintf("Messages: %d", m.messageCount)
 
 	// Combine
