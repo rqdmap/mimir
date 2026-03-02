@@ -8,20 +8,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/local/oc-manager/internal/db"
 	tui "github.com/local/oc-manager/internal/tui"
+	"github.com/muesli/termenv"
 )
 
 func main() {
 	listSessions := flag.Bool("list-sessions", false, "List sessions and exit")
 	flag.Parse()
 
-	// Open opencode DB (read-only)
 	opencodeDB, err := db.OpenOpencodeDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not open OpenCode database: %v\n", err)
-		// Don't exit — TUI can still show manager data
 	}
 
-	// Open manager DB (read-write, creates if not exists)
 	managerDB, err := db.OpenManagerDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: could not open manager database: %v\n", err)
@@ -48,7 +46,16 @@ func main() {
 		os.Exit(0)
 	}
 
-	app := tui.NewApp(opencodeDB, managerDB)
+	glamourStyle := os.Getenv("GLAMOUR_STYLE")
+	if glamourStyle == "" || glamourStyle == "auto" {
+		if termenv.HasDarkBackground() {
+			glamourStyle = "dark"
+		} else {
+			glamourStyle = "light"
+		}
+	}
+
+	app := tui.NewApp(opencodeDB, managerDB, glamourStyle)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

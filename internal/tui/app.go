@@ -30,7 +30,6 @@ const (
 	TabIdeas
 )
 
-
 // --- Async message types ---
 
 type sessionLoadedMsg struct {
@@ -59,6 +58,14 @@ type oneSessionTagsRefreshedMsg struct {
 	meta      model.SessionMeta
 }
 
+type sessionsBatchLoadedMsg struct {
+	sessions    []model.Session
+	sessionTags map[string][]string
+	loadedCount int
+	totalCount  int
+	done        bool
+}
+
 // App is the top-level BubbleTea model.
 type App struct {
 	focus           FocusedPane
@@ -85,14 +92,17 @@ type App struct {
 	searchQuery string
 
 	loading       bool // true while initial sessions are loading
+	loadedCount   int  // how many sessions have been loaded so far
+	totalCount    int  // total session count (from COUNT query)
 	hideSubAgents bool // true = hide sessions with parent_id != ""
 
-	showHelp  bool
-	activeTab AppTab
+	showHelp     bool
+	activeTab    AppTab
+	glamourStyle string
 }
 
 // NewApp creates an App with both databases wired in.
-func NewApp(opencodeDB, managerDB *sql.DB) App {
+func NewApp(opencodeDB, managerDB *sql.DB, glamourStyle string) App {
 	a := App{
 		focus:         FocusSessionList,
 		activeTab:     TabIdeas,
@@ -101,6 +111,7 @@ func NewApp(opencodeDB, managerDB *sql.DB) App {
 		managerDB:     managerDB,
 		loading:       true,
 		hideSubAgents: true,
+		glamourStyle:  glamourStyle,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -110,9 +121,9 @@ func NewApp(opencodeDB, managerDB *sql.DB) App {
 
 	// Initialise panes with zero size; recalcLayout will size them on first WindowSizeMsg.
 	a.sessionList = panes.NewSessionList(0, 0)
-	a.conversation = panes.NewConversationPane(0, 0)
+	a.conversation = panes.NewConversationPane(0, 0, glamourStyle)
 	a.metadata = panes.NewMetadataPane(0, 0)
-	a.ideasView = NewIdeasView(0, 0)
+	a.ideasView = NewIdeasView(0, 0, glamourStyle)
 	a.inputMode = NewInputMode(0, 0)
 	a.tagFilter = NewTagFilterView(0, 0)
 
@@ -125,7 +136,7 @@ func NewApp(opencodeDB, managerDB *sql.DB) App {
 // --- tea.Model interface ---
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.loadInitialSessions(), a.loadIdeas())
+	return tea.Batch(a.startProgressiveLoad(), a.loadIdeas())
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -158,6 +169,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Async result messages ---
 
+	case sessionsBatchLoadedMsg:
+		a.sessions = append(a.sessions, msg.sessions...)
+		for k, v := range msg.sessionTags {
+			a.sessionTags[k] = v
+		}
+		a.loadedCount = msg.loadedCount
+		a.totalCount = msg.totalCount
+		a.applyFilters()
+		a.err = ""
+		if msg.done {
+			a.loading = false
+			a.sessionList.SetLoading(false)
+			return a, nil
+		}
+		return a, a.loadNextBatch(msg.loadedCount, msg.totalCount)
+
 	case sessionsRefreshedMsg:
 		a.sessions = msg.sessions
 		a.sessionTags = msg.sessionTags
@@ -168,7 +195,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionLoadedMsg:
-		a.conversation.SetMessages(msg.messages)
+		cmd := a.conversation.SetMessages(msg.messages, msg.meta.SessionID)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		a.metadata.SetSessionMeta(msg.meta)
 		a.metadata.SetMessageCount(len(msg.messages))
 		a.err = ""
@@ -250,13 +280,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panes.SessionSelectedMsg:
 		a.selectedSession = &msg.Session
 		a.metadata.ClearSession()
-		a.conversation.SetMessages(nil)
+		a.conversation.SetMessages(nil, "")
 		if a.opencodeDB != nil {
 			cmds = append(cmds, a.loadSession(msg.Session))
 		}
 		return a, tea.Batch(cmds...)
 
 	case panes.ConvRendererReadyMsg:
+		var cmd tea.Cmd
+		a.conversation, cmd = a.conversation.Update(msg)
+		return a, cmd
+
+	case panes.AsyncConvRenderMsg:
 		var cmd tea.Cmd
 		a.conversation, cmd = a.conversation.Update(msg)
 		return a, cmd
@@ -452,8 +487,13 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case KeyRefresh:
 		a.err = ""
+		a.sessions = nil
+		a.loadedCount = 0
+		a.totalCount = 0
+		a.loading = true
+		a.sessionList.SetLoading(true)
 		if a.opencodeDB != nil {
-			return a, a.loadInitialSessions()
+			return a, a.startProgressiveLoad()
 		}
 		return a, nil
 
@@ -466,7 +506,6 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.setFocus(FocusSessionList)
 		return a, nil
 
-
 	case "]":
 		a.activeTab = TabSessions
 		a.setFocus(FocusSessionList)
@@ -476,7 +515,6 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.activeTab = TabIdeas
 		a.setFocus(FocusSessionList)
 		return a, nil
-
 
 	case "T":
 		// Open tag filter overlay
@@ -535,7 +573,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.selectedSession = &s
 					a.sessionList.SelectByID(s.ID)
 					a.metadata.ClearSession()
-					a.conversation.SetMessages(nil)
+					a.conversation.SetMessages(nil, "")
 					if a.opencodeDB != nil {
 						return a, a.loadSession(s)
 					}
@@ -717,6 +755,90 @@ func (a App) loadInitialSessions() tea.Cmd {
 	}
 }
 
+func (a App) startProgressiveLoad() tea.Cmd {
+	opencodeDB := a.opencodeDB
+	managerDB := a.managerDB
+	return func() tea.Msg {
+		if opencodeDB == nil {
+			return errMsg{err: "opencode.db not available"}
+		}
+		const batchSize = 100
+		var total int
+		var sessions []model.Session
+		var totalErr, sessErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			total, totalErr = db.CountSessions(opencodeDB)
+		}()
+		go func() {
+			defer wg.Done()
+			sessions, sessErr = db.ListSessionsPage(opencodeDB, batchSize, 0)
+		}()
+		wg.Wait()
+		if totalErr != nil {
+			return errMsg{err: totalErr.Error()}
+		}
+		if sessErr != nil {
+			return errMsg{err: sessErr.Error()}
+		}
+		tags := make(map[string][]string)
+		if managerDB != nil {
+			allTags, err2 := db.ListAllSessionTags(managerDB)
+			if err2 == nil {
+				for _, s := range sessions {
+					if t, ok := allTags[s.ID]; ok {
+						tags[s.ID] = t
+					}
+				}
+			}
+		}
+		loaded := len(sessions)
+		return sessionsBatchLoadedMsg{
+			sessions:    sessions,
+			sessionTags: tags,
+			loadedCount: loaded,
+			totalCount:  total,
+			done:        loaded >= total,
+		}
+	}
+}
+
+func (a App) loadNextBatch(offset, total int) tea.Cmd {
+	opencodeDB := a.opencodeDB
+	managerDB := a.managerDB
+	return func() tea.Msg {
+		if opencodeDB == nil {
+			return errMsg{err: "opencode.db not available"}
+		}
+		const batchSize = 100
+		sessions, err := db.ListSessionsPage(opencodeDB, batchSize, offset)
+		if err != nil {
+			return errMsg{err: err.Error()}
+		}
+		tags := make(map[string][]string)
+		if managerDB != nil {
+			allTags, err2 := db.ListAllSessionTags(managerDB)
+			if err2 == nil {
+				for _, s := range sessions {
+					if t, ok := allTags[s.ID]; ok {
+						tags[s.ID] = t
+					}
+				}
+			}
+		}
+		loaded := offset + len(sessions)
+		return sessionsBatchLoadedMsg{
+			sessions:    sessions,
+			sessionTags: tags,
+			loadedCount: loaded,
+			totalCount:  total,
+			done:        loaded >= total,
+		}
+	}
+}
+
 func (a App) loadSession(sess model.Session) tea.Cmd {
 	opencodeDB := a.opencodeDB
 	managerDB := a.managerDB
@@ -742,6 +864,9 @@ func (a App) loadSession(sess model.Session) tea.Cmd {
 		wg.Wait()
 		if msgsErr != nil {
 			return errMsg{err: msgsErr.Error()}
+		}
+		if meta.SessionID == "" {
+			meta.SessionID = sess.ID
 		}
 		return sessionLoadedMsg{messages: msgs, meta: meta}
 	}
@@ -869,7 +994,6 @@ type sessionMetaRefreshedMsg struct {
 	meta model.SessionMeta
 }
 
-
 // --- View helpers ---
 
 // renderTabHeader returns a 1-line tab header for the left pane.
@@ -886,7 +1010,6 @@ func (a App) renderTabHeader(active AppTab) string {
 	return ideas + "  " + sess
 }
 
-
 func (a App) buildStatusBar() string {
 	if a.searchMode {
 		searchBar := fmt.Sprintf("Search: %s_  │  Searching titles only  │  [Esc] cancel", a.searchQuery)
@@ -896,8 +1019,15 @@ func (a App) buildStatusBar() string {
 		return StatusBarStyle.Render(filterBar)
 	}
 
-	var parts []string
+	if a.loading && a.totalCount > 0 {
+		bar := StatusBarStyle.Render(fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount))
+		if a.err != "" {
+			return bar + ErrorStyle.Render("  ✗ "+a.err)
+		}
+		return bar
+	}
 
+	var parts []string
 
 	// Focus hint
 	switch a.focus {

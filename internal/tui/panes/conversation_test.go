@@ -4,9 +4,19 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/local/oc-manager/internal/model"
 	"github.com/local/oc-manager/internal/tui/panes"
 )
+
+func applySetMessages(cp panes.ConversationPane, messages []model.Message) panes.ConversationPane {
+	cmd := cp.SetMessages(messages, "test-session")
+	if cmd != nil {
+		msg := cmd()
+		cp, _ = cp.Update(msg)
+	}
+	return cp
+}
 
 func TestConversationRenderNoPanic(t *testing.T) {
 	messages := []model.Message{
@@ -30,8 +40,8 @@ func TestConversationRenderNoPanic(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(120, 40)
-	cp.SetMessages(messages)
+	cp := panes.NewConversationPane(120, 40, "dark")
+	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
 	if strings.Contains(view, "data:image") {
@@ -41,9 +51,8 @@ func TestConversationRenderNoPanic(t *testing.T) {
 }
 
 func TestConversationEmptyState(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	view := cp.View()
-	// Should show the no-session-selected message
 	if !strings.Contains(view, "Select a session") {
 		t.Errorf("empty pane should show 'Select a session' message, got: %q", view)
 	}
@@ -61,21 +70,20 @@ func TestConversationToolOnlySession(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(100, 30)
-	cp.SetMessages(messages)
+	cp := panes.NewConversationPane(100, 30, "dark")
+	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
 	if strings.Contains(view, "data:image") {
 		t.Fatal("should not contain base64 image data")
 	}
-	// Should mention no readable text since there are no text parts
 	if !strings.Contains(view, "no readable text") {
 		t.Errorf("tool-only session should mention no readable text, got: %q", view)
 	}
 }
 
 func TestConversationFocusStyleChange(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
+	cp := panes.NewConversationPane(80, 24, "dark")
 	cp.SetFocused(false)
 	unfocused := cp.View()
 	if unfocused == "" {
@@ -86,15 +94,11 @@ func TestConversationFocusStyleChange(t *testing.T) {
 	if focused == "" {
 		t.Error("focused view must not be empty")
 	}
-	// Both must not panic and must produce output.
-	// ANSI color differences are stripped in headless tests so we
-	// just verify both states render without error.
 	t.Logf("unfocused len=%d focused len=%d", len(unfocused), len(focused))
 }
 
 func TestConversationSetSize(t *testing.T) {
-	cp := panes.NewConversationPane(80, 24)
-	// Should not panic on resize
+	cp := panes.NewConversationPane(80, 24, "dark")
 	cp.SetSize(120, 40)
 	view := cp.View()
 	if view == "" {
@@ -113,8 +117,8 @@ func TestConversationFilePartNoBase64(t *testing.T) {
 		},
 	}
 
-	cp := panes.NewConversationPane(100, 30)
-	cp.SetMessages(messages)
+	cp := panes.NewConversationPane(100, 30, "dark")
+	cp = applySetMessages(cp, messages)
 	view := cp.View()
 
 	if strings.Contains(view, "data:") {
@@ -124,6 +128,7 @@ func TestConversationFilePartNoBase64(t *testing.T) {
 		t.Error("file part should display filename")
 	}
 }
+
 func TestConversationToolOutputRendered(t *testing.T) {
 	messages := []model.Message{
 		{
@@ -139,8 +144,8 @@ func TestConversationToolOutputRendered(t *testing.T) {
 			},
 		},
 	}
-	cp := panes.NewConversationPane(120, 40)
-	cp.SetMessages(messages)
+	cp := panes.NewConversationPane(120, 40, "dark")
+	cp = applySetMessages(cp, messages)
 	view := cp.View()
 	if !strings.Contains(view, "total 42") {
 		t.Errorf("tool output should be rendered in view, got: %q", view)
@@ -149,6 +154,7 @@ func TestConversationToolOutputRendered(t *testing.T) {
 		t.Errorf("tool name should still appear in view, got: %q", view)
 	}
 }
+
 func TestConversationToolOutputTruncated(t *testing.T) {
 	longOutput := strings.Repeat("a", 3000)
 	messages := []model.Message{
@@ -165,10 +171,43 @@ func TestConversationToolOutputTruncated(t *testing.T) {
 			},
 		},
 	}
-	cp := panes.NewConversationPane(120, 40)
-	cp.SetMessages(messages)
+	cp := panes.NewConversationPane(120, 40, "dark")
+	cp = applySetMessages(cp, messages)
 	view := cp.View()
 	if !strings.Contains(view, "[truncated]") {
 		t.Errorf("output over 2000 chars should be truncated, got len=%d", len(view))
+	}
+}
+
+func TestConversationSessionIDGuard(t *testing.T) {
+	messages := []model.Message{
+		{ID: "m1", Role: "user", Parts: []model.Part{{Type: model.PartTypeText, Text: "hello"}}},
+	}
+
+	cp := panes.NewConversationPane(120, 40, "dark")
+	cmd := cp.SetMessages(messages, "session-A")
+	if cmd == nil {
+		t.Fatal("SetMessages with non-empty messages must return a Cmd")
+	}
+	asyncMsg := cmd()
+
+	cp.SetMessages(nil, "session-B")
+
+	cp, _ = cp.Update(asyncMsg)
+	view := cp.View()
+
+	if strings.Contains(view, "hello") {
+		t.Error("stale render from session-A must not overwrite session-B content")
+	}
+	if !strings.Contains(view, "Select a session") {
+		t.Errorf("after switching to nil session, should show 'Select a session', got: %q", view)
+	}
+}
+
+func TestConversationSetMessagesNilReturnsNilCmd(t *testing.T) {
+	cp := panes.NewConversationPane(80, 24, "dark")
+	var cmd tea.Cmd = cp.SetMessages(nil, "")
+	if cmd != nil {
+		t.Error("SetMessages(nil) must return nil Cmd")
 	}
 }

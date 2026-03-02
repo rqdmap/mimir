@@ -1,0 +1,5 @@
+# Build output
+ocm
+
+# AI agent working files
+.sisyphus/

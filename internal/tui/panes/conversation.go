@@ -18,10 +18,17 @@ type ConvRendererReadyMsg struct {
 	Width    int
 }
 
-func newConvRendererCmd(width int) tea.Cmd {
+// AsyncConvRenderMsg is delivered when background markdown rendering completes.
+// SessionID guards against stale renders (ignored if current session changed).
+type AsyncConvRenderMsg struct {
+	SessionID string
+	Content   string
+}
+
+func newConvRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
 		r, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle(style),
 			glamour.WithWordWrap(width),
 		)
 		return ConvRendererReadyMsg{Renderer: r, Width: width}
@@ -30,35 +37,49 @@ func newConvRendererCmd(width int) tea.Cmd {
 
 // ConversationPane is the center panel displaying a session's full chat history.
 type ConversationPane struct {
-	viewport       viewport.Model
-	messages       []model.Message
-	focused        bool
-	width          int
-	height         int
-	ready          bool
-	ideaMode       bool
-	renderer       *glamour.TermRenderer
-	rendererWidth  int
+	viewport         viewport.Model
+	messages         []model.Message
+	focused          bool
+	width            int
+	height           int
+	ready            bool
+	ideaMode         bool
+	renderer         *glamour.TermRenderer
+	rendererWidth    int
+	currentSessionID string
+	glamourStyle     string
 }
 
-func NewConversationPane(width, height int) ConversationPane {
+func NewConversationPane(width, height int, glamourStyle string) ConversationPane {
 	vp := viewport.New(width-2, height-4)
 	vp.SetContent("Select a session from the list to view the conversation.")
 	return ConversationPane{
-		viewport:      vp,
-		messages:      nil,
-		focused:       false,
-		width:         width,
-		height:        height,
-		ready:         true,
+		viewport:     vp,
+		messages:     nil,
+		focused:      false,
+		width:        width,
+		height:       height,
+		ready:        true,
+		glamourStyle: glamourStyle,
 	}
 }
 
 // SetMessages updates the messages displayed in this pane.
-func (c *ConversationPane) SetMessages(messages []model.Message) {
+func (c *ConversationPane) SetMessages(messages []model.Message, sessionID string) tea.Cmd {
 	c.messages = messages
-	c.viewport.SetContent(c.renderContent())
+	c.currentSessionID = sessionID
+	if len(messages) == 0 {
+		c.viewport.SetContent("Select a session from the list to view the conversation.")
+		c.viewport.GotoTop()
+		return nil
+	}
+	c.viewport.SetContent("Rendering conversation...")
 	c.viewport.GotoTop()
+	renderer := c.renderer
+	return func() tea.Msg {
+		content := renderContentStandalone(messages, renderer)
+		return AsyncConvRenderMsg{SessionID: sessionID, Content: content}
+	}
 }
 
 // SetFocused controls focus state (affects border styling).
@@ -77,7 +98,7 @@ func (c *ConversationPane) SetSize(width, height int) tea.Cmd {
 		inner = 80
 	}
 	if inner != c.rendererWidth {
-		return newConvRendererCmd(inner)
+		return newConvRendererCmd(inner, c.glamourStyle)
 	}
 	return nil
 }
@@ -107,7 +128,24 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 	case ConvRendererReadyMsg:
 		c.renderer = msg.Renderer
 		c.rendererWidth = msg.Width
-		c.viewport.SetContent(c.renderContent())
+		if len(c.messages) == 0 {
+			// No messages loaded yet — nothing to re-render.
+			return c, nil
+		}
+		// Re-render asynchronously with the new renderer to avoid blocking the
+		// main goroutine (glamour rendering of long sessions takes 100ms–5s).
+		messages := c.messages
+		sessionID := c.currentSessionID
+		renderer := msg.Renderer
+		return c, func() tea.Msg {
+			content := renderContentStandalone(messages, renderer)
+			return AsyncConvRenderMsg{SessionID: sessionID, Content: content}
+		}
+	case AsyncConvRenderMsg:
+		if msg.SessionID == c.currentSessionID {
+			c.viewport.SetContent(msg.Content)
+			c.viewport.GotoTop()
+		}
 		return c, nil
 	case tea.KeyMsg:
 		if !c.focused {
@@ -165,7 +203,7 @@ func renderMarkdown(text string, width int) (result string) {
 		width = 80
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -194,8 +232,10 @@ func renderMarkdownCached(r *glamour.TermRenderer, text string) (result string) 
 	}
 	return out
 }
+
 // ansiEscape strips ANSI terminal escape codes from s.
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
 func stripANSI(s string) string {
 	return ansiEscape.ReplaceAllString(s, "")
 }
@@ -211,14 +251,20 @@ func renderRoleHeader(role string) string {
 
 // renderContent builds the full conversation string from all messages.
 func (c *ConversationPane) renderContent() string {
-	if len(c.messages) == 0 {
+	return renderContentStandalone(c.messages, c.renderer)
+}
+
+// renderContentStandalone is the goroutine-safe version of renderContent.
+// All TUI state is passed as explicit arguments.
+func renderContentStandalone(messages []model.Message, renderer *glamour.TermRenderer) string {
+	if len(messages) == 0 {
 		return "Select a session from the list to view the conversation."
 	}
 
 	var sb strings.Builder
 	hasRenderable := false
 
-	for _, msg := range c.messages {
+	for _, msg := range messages {
 		// role header
 		sb.WriteString(renderRoleHeader(msg.Role))
 		sb.WriteString("\n")
@@ -227,26 +273,30 @@ func (c *ConversationPane) renderContent() string {
 			switch part.Type {
 			case model.PartTypeText:
 				// Use glamour with recovery; fall back to plain text
-				rendered := renderMarkdownCached(c.renderer, part.Text)
+				rendered := renderMarkdownCached(renderer, part.Text)
 				sb.WriteString(rendered)
 				hasRenderable = true
 
-case model.PartTypeTool:
-			status := part.ToolStatus
-			if status == "" {
-				status = "running"
-			}
-			line := fmt.Sprintf("[⚙ %s] ── %s ──", part.ToolName, status)
-			sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
-			sb.WriteString("\n")
-			if part.ToolOutput != "" {
-				out := stripANSI(part.ToolOutput)
-				if len(out) > 2000 {
-					out = out[:2000] + "\n... [truncated]"
+			case model.PartTypeTool:
+				status := part.ToolStatus
+				if status == "" {
+					status = "running"
 				}
-				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(out))
+				line := fmt.Sprintf("[⚙ %s] ── %s ──", part.ToolName, status)
+				sb.WriteString(lipgloss.NewStyle().Faint(true).Render(line))
 				sb.WriteString("\n")
-			}
+				if part.ToolOutput != "" {
+					out := part.ToolOutput
+					if len(out) > 4000 {
+						out = out[:4000]
+					}
+					out = stripANSI(out)
+					if len(out) > 2000 {
+						out = out[:2000] + "\n... [truncated]"
+					}
+					sb.WriteString(lipgloss.NewStyle().Faint(true).Render(out))
+					sb.WriteString("\n")
+				}
 			case model.PartTypeReasoning:
 				line := "[🧠 Reasoning] ── (hidden) ──"
 				sb.WriteString(lipgloss.NewStyle().Faint(true).Italic(true).Render(line))
