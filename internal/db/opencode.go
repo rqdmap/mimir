@@ -27,10 +27,6 @@ func OpenOpencodeDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
 	}
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("ping opencode db: %w", err)
-	}
 	return db, nil
 }
 

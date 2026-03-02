@@ -95,7 +95,7 @@ type App struct {
 func NewApp(opencodeDB, managerDB *sql.DB) App {
 	a := App{
 		focus:         FocusSessionList,
-		activeTab:     TabSessions,
+		activeTab:     TabIdeas,
 		sessionTags:   make(map[string][]string),
 		opencodeDB:    opencodeDB,
 		managerDB:     managerDB,
