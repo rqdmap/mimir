@@ -22,7 +22,7 @@ func OpenOpencodeDB() (*sql.DB, error) {
 	}
 	dbPath := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 	// MUST use ?mode=ro to enforce read-only
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_cache_size=-65536&mmap_size=268435456", dbPath)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_cache_size=-65536&mmap_size=536870912", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
@@ -151,12 +151,38 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		return nil, fmt.Errorf("message rows error: %w", err)
 	}
 
-	// Load ALL parts for this session in ONE query
+	// Load ALL parts for this session in ONE query using JSON_EXTRACT to avoid
+	// reading the base64 url field of file-type parts into memory.
 	const batchPartQuery = `
-		SELECT id, message_id, data
-		FROM part
-		WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)
-		ORDER BY time_created ASC
+		SELECT
+		    p.id,
+		    p.message_id,
+		    JSON_EXTRACT(p.data, '$.type')  AS part_type,
+		    CASE JSON_EXTRACT(p.data, '$.type')
+		        WHEN 'text'      THEN JSON_EXTRACT(p.data, '$.text')
+		        WHEN 'reasoning' THEN JSON_EXTRACT(p.data, '$.text')
+		        ELSE NULL
+		    END AS text_content,
+		    CASE JSON_EXTRACT(p.data, '$.type')
+		        WHEN 'tool' THEN p.data
+		        ELSE NULL
+		    END AS tool_data,
+		    CASE JSON_EXTRACT(p.data, '$.type')
+		        WHEN 'file' THEN JSON_EXTRACT(p.data, '$.filename')
+		        ELSE NULL
+		    END AS filename,
+		    CASE JSON_EXTRACT(p.data, '$.type')
+		        WHEN 'file' THEN JSON_EXTRACT(p.data, '$.mime')
+		        ELSE NULL
+		    END AS mime_type,
+		    CASE JSON_EXTRACT(p.data, '$.type')
+		        WHEN 'patch' THEN JSON_EXTRACT(p.data, '$.files')
+		        ELSE NULL
+		    END AS patch_files
+		FROM part p
+		WHERE p.message_id IN (SELECT id FROM message WHERE session_id = ?)
+		  AND JSON_EXTRACT(p.data, '$.type') NOT IN ('step-start', 'step-finish', 'agent', 'compaction')
+		ORDER BY p.time_created ASC
 	`
 	partRows, err := db.Query(batchPartQuery, sessionID)
 	if err != nil {
@@ -166,16 +192,13 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 
 	partsByMsg := make(map[string][]model.Part)
 	for partRows.Next() {
-		var (
-			partID   string
-			msgID    string
-			dataJSON string
-		)
-		if err := partRows.Scan(&partID, &msgID, &dataJSON); err != nil {
+		var partID, msgID string
+		var partType, textContent, toolData, filename, mimeType, patchFiles sql.NullString
+		if err := partRows.Scan(&partID, &msgID, &partType, &textContent, &toolData, &filename, &mimeType, &patchFiles); err != nil {
 			return nil, fmt.Errorf("scan part: %w", err)
 		}
 
-		part := parsePart(partID, dataJSON)
+		part := parsePartFromFields(partID, partType, textContent, toolData, filename, mimeType, patchFiles)
 		if part != nil {
 			partsByMsg[msgID] = append(partsByMsg[msgID], *part)
 		}
@@ -190,6 +213,41 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 	}
 
 	return messages, nil
+}
+
+// parsePartFromFields builds a model.Part from pre-extracted SQL columns.
+// file parts never have their url field loaded — only filename and mime.
+func parsePartFromFields(id string, partType, textContent, toolData, filename, mimeType, patchFiles sql.NullString) *model.Part {
+	switch partType.String {
+	case "text":
+		return &model.Part{Type: model.PartTypeText, Text: textContent.String}
+	case "reasoning":
+		return &model.Part{Type: model.PartTypeReasoning, Reasoning: textContent.String}
+	case "tool":
+		var p struct {
+			Tool  string `json:"tool"`
+			State struct {
+				Status string `json:"status"`
+				Output string `json:"output"`
+			} `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(toolData.String), &p); err != nil {
+			log.Printf("skipping tool part %s: bad JSON: %v", id, err)
+			return nil
+		}
+		return &model.Part{Type: model.PartTypeTool, ToolName: p.Tool, ToolStatus: p.State.Status, ToolOutput: p.State.Output}
+	case "file":
+		return &model.Part{Type: model.PartTypeFile, Filename: filename.String, MimeType: mimeType.String}
+	case "patch":
+		var files []string
+		if patchFiles.Valid && patchFiles.String != "" {
+			_ = json.Unmarshal([]byte(patchFiles.String), &files)
+		}
+		return &model.Part{Type: model.PartTypePatch, Text: strings.Join(files, ", ")}
+	default:
+		log.Printf("skipping unknown part type: %s", partType.String)
+		return nil
+	}
 }
 
 // parsePart safely parses a part's JSON data into a model.Part.
