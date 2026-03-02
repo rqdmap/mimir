@@ -432,6 +432,13 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	// Conversation search mode — forward ALL keys directly to the pane
+	if a.focus == FocusConversation && a.conversation.SearchMode() {
+		var cmd tea.Cmd
+		a.conversation, cmd = a.conversation.Update(msg)
+		return a, cmd
+	}
+
 	// Search mode — intercept all keys
 	if a.searchMode {
 		switch key {
@@ -537,8 +544,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case KeySearch:
-		a.searchMode = true
-		return a, nil
+		if a.focus != FocusConversation {
+			a.searchMode = true
+			return a, nil
+		}
+		// FocusConversation: fall through to pane delegation below
 
 	case "tab":
 		a.cycleFocusForward()
@@ -1135,7 +1145,20 @@ func (a App) buildStatusBar() string {
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] open  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
 		}
 	case FocusConversation:
-		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page")
+		if a.conversation.SearchMode() {
+			matchInfo := ""
+			if a.conversation.SearchMatchCount() > 0 {
+				matchInfo = fmt.Sprintf(" (%d/%d)", a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount())
+			} else if a.conversation.SearchQuery() != "" {
+				matchInfo = " (no matches)"
+			}
+			parts = append(parts, fmt.Sprintf("/ %s_%s  │  [n/N] navigate  [Esc/Enter] close", a.conversation.SearchQuery(), matchInfo))
+		} else if a.conversation.SearchMatchCount() > 0 {
+			parts = append(parts, fmt.Sprintf("[n/N] navigate  (%d/%d: %q)  │  [/] new search",
+				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery()))
+		} else {
+			parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search")
+		}
 	case FocusMetadata:
 		parts = append(parts, "[[] ideas  []] sessions  [T] tags")
 	}
@@ -1174,6 +1197,10 @@ func (a App) overlayHelp(background string) string {
   In Conversation:
   [↑ ↓ / j k]       Scroll
   [Ctrl+D / Ctrl+U] Page down/up
+  [g / G]           Top / bottom
+  [/]               Search conversation
+  [n / N]           Next / prev match
+  [Esc / Enter]     Exit search
 
   In Ideas Tab:
   [Enter]           Jump to linked session

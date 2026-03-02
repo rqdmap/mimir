@@ -48,6 +48,14 @@ type ConversationPane struct {
 	rendererWidth    int
 	currentSessionID string
 	glamourStyle     string
+
+	rawLines   []string
+	plainLines []string
+
+	convSearchMode    bool
+	convSearchQuery   string
+	convSearchMatches []int
+	convSearchIdx     int
 }
 
 func NewConversationPane(width, height int, glamourStyle string) ConversationPane {
@@ -68,6 +76,7 @@ func NewConversationPane(width, height int, glamourStyle string) ConversationPan
 func (c *ConversationPane) SetMessages(messages []model.Message, sessionID string) tea.Cmd {
 	c.messages = messages
 	c.currentSessionID = sessionID
+	c.clearConvSearch()
 	if len(messages) == 0 {
 		c.viewport.SetContent("Select a session from the list to view the conversation.")
 		c.viewport.GotoTop()
@@ -81,6 +90,20 @@ func (c *ConversationPane) SetMessages(messages []model.Message, sessionID strin
 		return AsyncConvRenderMsg{SessionID: sessionID, Content: content}
 	}
 }
+
+func (c *ConversationPane) clearConvSearch() {
+	c.convSearchMode = false
+	c.convSearchQuery = ""
+	c.convSearchMatches = nil
+	c.convSearchIdx = 0
+	c.rawLines = nil
+	c.plainLines = nil
+}
+
+func (c ConversationPane) SearchMode() bool      { return c.convSearchMode }
+func (c ConversationPane) SearchQuery() string   { return c.convSearchQuery }
+func (c ConversationPane) SearchMatchCount() int { return len(c.convSearchMatches) }
+func (c ConversationPane) SearchMatchIdx() int   { return c.convSearchIdx }
 
 // SetFocused controls focus state (affects border styling).
 func (c *ConversationPane) SetFocused(focused bool) {
@@ -143,15 +166,60 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 		}
 	case AsyncConvRenderMsg:
 		if msg.SessionID == c.currentSessionID {
-			c.viewport.SetContent(msg.Content)
-			c.viewport.GotoTop()
+			c.rawLines = strings.Split(msg.Content, "\n")
+			c.plainLines = make([]string, len(c.rawLines))
+			for i, line := range c.rawLines {
+				c.plainLines[i] = stripANSI(line)
+			}
+			if c.convSearchQuery != "" {
+				c.updateConvSearchHighlights()
+			} else {
+				c.viewport.SetContent(msg.Content)
+				c.viewport.GotoTop()
+			}
 		}
 		return c, nil
 	case tea.KeyMsg:
 		if !c.focused {
 			return c, nil
 		}
+		if c.convSearchMode {
+			switch msg.String() {
+			case "esc", "enter":
+				c.convSearchMode = false
+			case "backspace":
+				if len(c.convSearchQuery) > 0 {
+					c.convSearchQuery = c.convSearchQuery[:len(c.convSearchQuery)-1]
+					c.updateConvSearchHighlights()
+				}
+			default:
+				if k := msg.String(); len(k) == 1 {
+					c.convSearchQuery += k
+					c.updateConvSearchHighlights()
+				}
+			}
+			return c, nil
+		}
 		switch msg.String() {
+		case "/":
+			if len(c.rawLines) > 0 {
+				c.convSearchMode = true
+				c.convSearchQuery = ""
+				c.convSearchMatches = nil
+				c.convSearchIdx = 0
+				c.viewport.SetContent(strings.Join(c.rawLines, "\n"))
+			}
+		case "n":
+			if len(c.convSearchMatches) > 0 {
+				c.convSearchIdx = (c.convSearchIdx + 1) % len(c.convSearchMatches)
+				c.updateConvSearchHighlights()
+			}
+		case "N":
+			if len(c.convSearchMatches) > 0 {
+				n := len(c.convSearchMatches)
+				c.convSearchIdx = (c.convSearchIdx - 1 + n) % n
+				c.updateConvSearchHighlights()
+			}
 		case "j", "down":
 			c.viewport.LineDown(1)
 		case "k", "up":
@@ -361,4 +429,79 @@ func renderContentStandalone(messages []model.Message, renderer *glamour.TermRen
 		content += "\nThis session contains only tool calls with no readable text."
 	}
 	return content
+}
+
+var (
+	convSearchMatchStyle   = lipgloss.NewStyle().Background(lipgloss.Color("226")).Foreground(lipgloss.Color("0"))
+	convSearchCurrentStyle = lipgloss.NewStyle().Background(lipgloss.Color("208")).Foreground(lipgloss.Color("0")).Bold(true)
+)
+
+func (c *ConversationPane) updateConvSearchHighlights() {
+	q := strings.ToLower(c.convSearchQuery)
+
+	c.convSearchMatches = nil
+	if q != "" {
+		for i, plain := range c.plainLines {
+			if strings.Contains(strings.ToLower(plain), q) {
+				c.convSearchMatches = append(c.convSearchMatches, i)
+			}
+		}
+	}
+	if c.convSearchIdx >= len(c.convSearchMatches) {
+		c.convSearchIdx = 0
+	}
+
+	if q == "" || len(c.rawLines) == 0 {
+		c.viewport.SetContent(strings.Join(c.rawLines, "\n"))
+		return
+	}
+
+	matchSet := make(map[int]bool, len(c.convSearchMatches))
+	for _, m := range c.convSearchMatches {
+		matchSet[m] = true
+	}
+	currentLine := -1
+	if len(c.convSearchMatches) > 0 {
+		currentLine = c.convSearchMatches[c.convSearchIdx]
+	}
+
+	var sb strings.Builder
+	for i, plain := range c.plainLines {
+		if matchSet[i] {
+			sb.WriteString(injectSearchHighlight(plain, c.convSearchQuery, i == currentLine))
+		} else {
+			sb.WriteString(c.rawLines[i])
+		}
+		if i < len(c.plainLines)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	c.viewport.SetContent(sb.String())
+	if currentLine >= 0 {
+		c.viewport.SetYOffset(currentLine)
+	}
+}
+
+func injectSearchHighlight(plain, query string, isCurrent bool) string {
+	style := convSearchMatchStyle
+	if isCurrent {
+		style = convSearchCurrentStyle
+	}
+	lowerPlain := strings.ToLower(plain)
+	lowerQuery := strings.ToLower(query)
+	var sb strings.Builder
+	pos := 0
+	for pos < len(plain) {
+		idx := strings.Index(lowerPlain[pos:], lowerQuery)
+		if idx < 0 {
+			sb.WriteString(plain[pos:])
+			break
+		}
+		abs := pos + idx
+		sb.WriteString(plain[pos:abs])
+		sb.WriteString(style.Render(plain[abs : abs+len(query)]))
+		pos = abs + len(query)
+	}
+	return sb.String()
 }
