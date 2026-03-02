@@ -195,7 +195,7 @@ func (s SessionList) View() string {
 		Width(s.Width - 2).
 		Height(s.Height - 2)
 
-	if s.loading {
+	if s.loading && len(s.list.Items()) == 0 {
 		return style.Render("⟳  Loading sessions...")
 	}
 
