@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/local/oc-manager/internal/db"
@@ -52,6 +54,10 @@ func main() {
 			glamourStyle = "dark"
 		} else {
 			glamourStyle = "light"
+		}
+	} else if strings.HasPrefix(glamourStyle, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			glamourStyle = filepath.Join(home, glamourStyle[2:])
 		}
 	}
 

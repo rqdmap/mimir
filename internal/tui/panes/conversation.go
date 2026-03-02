@@ -27,10 +27,16 @@ type AsyncConvRenderMsg struct {
 
 func newConvRendererCmd(width int, style string) tea.Cmd {
 	return func() tea.Msg {
-		r, _ := glamour.NewTermRenderer(
+		r, err := glamour.NewTermRenderer(
 			glamour.WithStylePath(style),
 			glamour.WithWordWrap(width),
 		)
+		if err != nil {
+			r, _ = glamour.NewTermRenderer(
+				glamour.WithStylePath("dark"),
+				glamour.WithWordWrap(width),
+			)
+		}
 		return ConvRendererReadyMsg{Renderer: r, Width: width}
 	}
 }
