@@ -213,6 +213,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tagsLoadedMsg:
 		a.tagsView.SetTags(msg.tags, msg.counts)
+		a.tagsView.SetSessions(a.sessions, a.sessionTags)
 		return a, nil
 
 	case sessionIdeasRefreshedMsg:
@@ -316,6 +317,56 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, a.loadTagsWithCounts())
 		}
 		return a, tea.Batch(cmds...)
+
+	case DeleteTagMsg:
+		if a.managerDB != nil {
+			if err := db.DeleteTag(a.managerDB, msg.TagName); err != nil {
+				a.err = fmt.Sprintf("delete tag: %v", err)
+			} else {
+				if a.activeTagFilter == msg.TagName {
+					a.activeTagFilter = ""
+					a.applyFilters()
+				}
+				cmds = append(cmds, a.loadTagsWithCounts())
+			}
+		}
+		return a, tea.Batch(cmds...)
+
+	case ManageTagRemoveMsg:
+		if a.managerDB != nil {
+			_ = db.RemoveSessionTag(a.managerDB, msg.SessionID, msg.TagName)
+			cmds = append(cmds, a.reloadOneSessionTags(msg.SessionID))
+			cmds = append(cmds, a.loadTagsWithCounts())
+		}
+		return a, tea.Batch(cmds...)
+
+	case ActivateRenameMsg:
+		a.inputMode.ActivateRename(msg.TagName)
+		return a, nil
+
+	case InputRenamedTagMsg:
+		if a.managerDB != nil {
+			if err := db.RenameTag(a.managerDB, msg.OldName, msg.NewName); err != nil {
+				a.err = fmt.Sprintf("rename tag: %v", err)
+			} else {
+				if a.activeTagFilter == msg.OldName {
+					a.activeTagFilter = msg.NewName
+				}
+				for sid, tags := range a.sessionTags {
+					for i, t := range tags {
+						if t == msg.OldName {
+							a.sessionTags[sid][i] = msg.NewName
+						}
+					}
+				}
+				a.applyFilters()
+				cmds = append(cmds, a.loadTagsWithCounts())
+			}
+		}
+		return a, tea.Batch(cmds...)
+
+	case ManageTagExitMsg:
+		return a, nil
 
 	case sessionMetaRefreshedMsg:
 		a.metadata.SetSessionMeta(msg.meta)
@@ -1048,6 +1099,7 @@ func (a *App) applyFilters() {
 
 	a.ideasView.SetFilter(a.ideasSearchQuery)
 	a.tagsView.SetFilter(a.tagsSearchQuery)
+	a.tagsView.SetSessions(a.sessions, a.sessionTags)
 }
 
 // --- Additional async message types for metadata refresh ---
@@ -1157,7 +1209,7 @@ func (a App) buildStatusBar() string {
 		case TabIdeas:
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] jump to session  [/] search  [Esc] clear  [[]]] switch tab")
 		case TabTags:
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] filter sessions  [/] search  [Esc] clear  [[]]] switch tab")
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] filter  [m] manage  [d] delete  [r] rename  [/] search  [Esc] clear")
 		default:
 			agentHint := "[A] show sub-agents"
 			if !a.hideSubAgents {
@@ -1215,7 +1267,10 @@ func (a App) overlayHelp(background string) string {
   [d]               Delete idea (confirm y/n)
 
   In Tags Tab:
-  [Enter]           Filter sessions by tag`
+  [Enter]           Filter sessions by tag
+  [m]               Manage sessions for tag
+  [d]               Delete tag
+  [r]               Rename tag`
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

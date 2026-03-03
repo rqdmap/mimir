@@ -15,6 +15,7 @@ const (
 	InputTargetNone InputTarget = iota
 	InputTargetIdea
 	InputTargetTag
+	InputTargetTagRename
 )
 
 type InputSavedIdeaMsg struct {
@@ -30,6 +31,11 @@ type InputTagsUpdatedMsg struct {
 }
 
 type InputCancelledMsg struct{}
+
+type InputRenamedTagMsg struct {
+	OldName string
+	NewName string
+}
 
 type InputMode struct {
 	target       InputTarget
@@ -87,6 +93,22 @@ func (im *InputMode) ActivateIdeaEdit(ideaID, content string) {
 	ti.Placeholder = "Edit idea..."
 	ti.Width = 56
 	ti.SetValue(content)
+	ti.CursorEnd()
+	ti.Focus()
+	im.textinput = ti
+}
+
+func (im *InputMode) ActivateRename(tagName string) {
+	im.target = InputTargetTagRename
+	im.sessionID = tagName
+	im.ideaID = ""
+	im.sessionTitle = ""
+	im.active = true
+
+	ti := textinput.New()
+	ti.Placeholder = "New tag name..."
+	ti.Width = 56
+	ti.SetValue(tagName)
 	ti.CursorEnd()
 	ti.Focus()
 	im.textinput = ti
@@ -261,6 +283,28 @@ func (im InputMode) Update(msg tea.Msg) (InputMode, tea.Cmd) {
 					return im, cmd
 				}
 			}
+
+		case InputTargetTagRename:
+			switch msg.String() {
+			case "enter":
+				newName := strings.TrimSpace(im.textinput.Value())
+				oldName := im.sessionID
+				if newName == "" || newName == oldName {
+					im.Deactivate()
+					return im, func() tea.Msg { return InputCancelledMsg{} }
+				}
+				im.Deactivate()
+				return im, func() tea.Msg {
+					return InputRenamedTagMsg{OldName: oldName, NewName: newName}
+				}
+			case "esc":
+				im.Deactivate()
+				return im, func() tea.Msg { return InputCancelledMsg{} }
+			default:
+				var cmd tea.Cmd
+				im.textinput, cmd = im.textinput.Update(msg)
+				return im, cmd
+			}
 		}
 	}
 
@@ -369,6 +413,17 @@ func (im InputMode) View() string {
 			hintStyle.Render(hintText),
 		)
 		content = lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	case InputTargetTagRename:
+		title := titleStyle.Render("Rename Tag")
+		hint := hintStyle.Render("[Enter] confirm  [Esc] cancel")
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			title,
+			"",
+			im.textinput.View(),
+			"",
+			hint,
+		)
 
 	default:
 		return ""
