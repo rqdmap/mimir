@@ -199,6 +199,211 @@ func TestRunMigrationsIdempotent(t *testing.T) {
 	t.Log("TestRunMigrationsIdempotent PASS")
 }
 
+func TestDeleteTag(t *testing.T) {
+	memDB := newInMemoryDB(t)
+
+	_, err := memDB.Exec(`INSERT INTO tag (name) VALUES (?)`, "qa-del")
+	if err != nil {
+		t.Fatalf("insert tag: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-del-1")
+	if err != nil {
+		t.Fatalf("insert session_meta 1: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-del-2")
+	if err != nil {
+		t.Fatalf("insert session_meta 2: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-del-1", "qa-del")
+	if err != nil {
+		t.Fatalf("insert session_tag 1: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-del-2", "qa-del")
+	if err != nil {
+		t.Fatalf("insert session_tag 2: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO idea (id, content, time_created, time_updated) VALUES (?, ?, 0, 0)`, "idea-del-1", "content")
+	if err != nil {
+		t.Fatalf("insert idea: %v", err)
+	}
+	_, err = memDB.Exec(`INSERT INTO idea_tag (idea_id, tag_name) VALUES (?, ?)`, "idea-del-1", "qa-del")
+	if err != nil {
+		t.Fatalf("insert idea_tag: %v", err)
+	}
+
+	if err := db.DeleteTag(memDB, "qa-del"); err != nil {
+		t.Fatalf("DeleteTag: %v", err)
+	}
+
+	var cnt int
+	memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "qa-del").Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("expected tag gone, got count=%d", cnt)
+	}
+	memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE tag_name = ?`, "qa-del").Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("expected session_tag gone, got count=%d", cnt)
+	}
+	memDB.QueryRow(`SELECT COUNT(*) FROM idea_tag WHERE tag_name = ?`, "qa-del").Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("expected idea_tag gone, got count=%d", cnt)
+	}
+	t.Log("TestDeleteTag PASS")
+}
+
+func TestRenameTag(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		memDB := newInMemoryDB(t)
+
+		_, err := memDB.Exec(`INSERT INTO tag (name, color) VALUES (?, ?)`, "old-name", "red")
+		if err != nil {
+			t.Fatalf("insert tag: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-ren-1")
+		if err != nil {
+			t.Fatalf("insert session_meta: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-ren-1", "old-name")
+		if err != nil {
+			t.Fatalf("insert session_tag: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO idea (id, content, time_created, time_updated) VALUES (?, ?, 0, 0)`, "idea-ren-1", "content")
+		if err != nil {
+			t.Fatalf("insert idea: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO idea_tag (idea_id, tag_name) VALUES (?, ?)`, "idea-ren-1", "old-name")
+		if err != nil {
+			t.Fatalf("insert idea_tag: %v", err)
+		}
+
+		if err := db.RenameTag(memDB, "old-name", "new-name"); err != nil {
+			t.Fatalf("RenameTag: %v", err)
+		}
+
+		var cnt int
+		memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "old-name").Scan(&cnt)
+		if cnt != 0 {
+			t.Fatalf("old tag should be gone, got count=%d", cnt)
+		}
+		var color string
+		memDB.QueryRow(`SELECT color FROM tag WHERE name = ?`, "new-name").Scan(&color)
+		if color != "red" {
+			t.Fatalf("color not preserved: got %q", color)
+		}
+		memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE tag_name = ? AND session_id = ?`, "new-name", "sess-ren-1").Scan(&cnt)
+		if cnt != 1 {
+			t.Fatalf("session_tag not updated, got count=%d", cnt)
+		}
+		memDB.QueryRow(`SELECT COUNT(*) FROM idea_tag WHERE tag_name = ? AND idea_id = ?`, "new-name", "idea-ren-1").Scan(&cnt)
+		if cnt != 1 {
+			t.Fatalf("idea_tag not updated, got count=%d", cnt)
+		}
+		t.Log("TestRenameTag/happy path PASS")
+	})
+
+	t.Run("conflict", func(t *testing.T) {
+		memDB := newInMemoryDB(t)
+
+		_, err := memDB.Exec(`INSERT INTO tag (name) VALUES (?)`, "foo")
+		if err != nil {
+			t.Fatalf("insert tag foo: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO tag (name) VALUES (?)`, "bar")
+		if err != nil {
+			t.Fatalf("insert tag bar: %v", err)
+		}
+
+		if err := db.RenameTag(memDB, "foo", "bar"); err == nil {
+			t.Fatal("expected error renaming to existing tag, got nil")
+		}
+
+		var cnt int
+		memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "foo").Scan(&cnt)
+		if cnt != 1 {
+			t.Fatalf("foo should still exist, got count=%d", cnt)
+		}
+		memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "bar").Scan(&cnt)
+		if cnt != 1 {
+			t.Fatalf("bar should still exist, got count=%d", cnt)
+		}
+		t.Log("TestRenameTag/conflict PASS")
+	})
+}
+
+func TestRemoveSessionTagAutoCleanup(t *testing.T) {
+	t.Run("single session auto-delete", func(t *testing.T) {
+		memDB := newInMemoryDB(t)
+
+		_, err := memDB.Exec(`INSERT INTO tag (name) VALUES (?)`, "qa-cleanup")
+		if err != nil {
+			t.Fatalf("insert tag: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-cleanup-1")
+		if err != nil {
+			t.Fatalf("insert session_meta: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-cleanup-1", "qa-cleanup")
+		if err != nil {
+			t.Fatalf("insert session_tag: %v", err)
+		}
+
+		if err := db.RemoveSessionTag(memDB, "sess-cleanup-1", "qa-cleanup"); err != nil {
+			t.Fatalf("RemoveSessionTag: %v", err)
+		}
+
+		var cnt int
+		memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE session_id = ? AND tag_name = ?`, "sess-cleanup-1", "qa-cleanup").Scan(&cnt)
+		if cnt != 0 {
+			t.Fatalf("session_tag should be gone, got count=%d", cnt)
+		}
+		memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "qa-cleanup").Scan(&cnt)
+		if cnt != 0 {
+			t.Fatalf("tag should be auto-deleted, got count=%d", cnt)
+		}
+		t.Log("TestRemoveSessionTagAutoCleanup/single session PASS")
+	})
+
+	t.Run("multi-session tag preserved", func(t *testing.T) {
+		memDB := newInMemoryDB(t)
+
+		_, err := memDB.Exec(`INSERT INTO tag (name) VALUES (?)`, "qa-multi")
+		if err != nil {
+			t.Fatalf("insert tag: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-multi-1")
+		if err != nil {
+			t.Fatalf("insert session_meta 1: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, '', 0)`, "sess-multi-2")
+		if err != nil {
+			t.Fatalf("insert session_meta 2: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-multi-1", "qa-multi")
+		if err != nil {
+			t.Fatalf("insert session_tag 1: %v", err)
+		}
+		_, err = memDB.Exec(`INSERT INTO session_tag (session_id, tag_name) VALUES (?, ?)`, "sess-multi-2", "qa-multi")
+		if err != nil {
+			t.Fatalf("insert session_tag 2: %v", err)
+		}
+
+		if err := db.RemoveSessionTag(memDB, "sess-multi-1", "qa-multi"); err != nil {
+			t.Fatalf("RemoveSessionTag: %v", err)
+		}
+
+		var cnt int
+		memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE session_id = ? AND tag_name = ?`, "sess-multi-1", "qa-multi").Scan(&cnt)
+		if cnt != 0 {
+			t.Fatalf("sess-multi-1 session_tag should be gone, got count=%d", cnt)
+		}
+		memDB.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, "qa-multi").Scan(&cnt)
+		if cnt != 1 {
+			t.Fatalf("tag should be preserved (still used by sess-multi-2), got count=%d", cnt)
+		}
+		t.Log("TestRemoveSessionTagAutoCleanup/multi-session PASS")
+	})
+}
+
 func TestGetIdeasForSession(t *testing.T) {
 	memDB := newInMemoryDB(t)
 

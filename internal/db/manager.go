@@ -170,7 +170,8 @@ func AddSessionTag(db *sql.DB, sessionID, tag string) error {
 	return tx.Commit()
 }
 
-// RemoveSessionTag removes a tag from a session.
+// RemoveSessionTag removes a tag from a session. If no other sessions reference
+// the tag after removal, the tag row is auto-deleted from the tag table.
 func RemoveSessionTag(db *sql.DB, sessionID, tag string) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -181,6 +182,83 @@ func RemoveSessionTag(db *sql.DB, sessionID, tag string) error {
 	_, err = tx.Exec(`DELETE FROM session_tag WHERE session_id = ? AND tag_name = ?`, sessionID, tag)
 	if err != nil {
 		return fmt.Errorf("delete session_tag: %w", err)
+	}
+
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE tag_name = ?`, tag).Scan(&count); err != nil {
+		return fmt.Errorf("count session_tag: %w", err)
+	}
+	if count == 0 {
+		_, err = tx.Exec(`DELETE FROM tag WHERE name = ?`, tag)
+		if err != nil {
+			return fmt.Errorf("auto-delete tag: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// DeleteTag removes a tag and all its associations from idea_tag and session_tag.
+func DeleteTag(db *sql.DB, tagName string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`DELETE FROM idea_tag WHERE tag_name = ?`, tagName)
+	if err != nil {
+		return fmt.Errorf("delete idea_tag: %w", err)
+	}
+
+	_, err = tx.Exec(`DELETE FROM session_tag WHERE tag_name = ?`, tagName)
+	if err != nil {
+		return fmt.Errorf("delete session_tag: %w", err)
+	}
+
+	_, err = tx.Exec(`DELETE FROM tag WHERE name = ?`, tagName)
+	if err != nil {
+		return fmt.Errorf("delete tag: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// RenameTag renames a tag, preserving its color and updating all associations.
+// Returns an error if newName already exists in the tag table.
+func RenameTag(db *sql.DB, oldName, newName string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM tag WHERE name = ?`, newName).Scan(&existing); err != nil {
+		return fmt.Errorf("check tag exists: %w", err)
+	}
+	if existing > 0 {
+		return fmt.Errorf("tag %q already exists", newName)
+	}
+
+	_, err = tx.Exec(`INSERT INTO tag (name, color) SELECT ?, color FROM tag WHERE name = ?`, newName, oldName)
+	if err != nil {
+		return fmt.Errorf("insert renamed tag: %w", err)
+	}
+
+	_, err = tx.Exec(`UPDATE session_tag SET tag_name = ? WHERE tag_name = ?`, newName, oldName)
+	if err != nil {
+		return fmt.Errorf("update session_tag: %w", err)
+	}
+
+	_, err = tx.Exec(`UPDATE idea_tag SET tag_name = ? WHERE tag_name = ?`, newName, oldName)
+	if err != nil {
+		return fmt.Errorf("update idea_tag: %w", err)
+	}
+
+	_, err = tx.Exec(`DELETE FROM tag WHERE name = ?`, oldName)
+	if err != nil {
+		return fmt.Errorf("delete old tag: %w", err)
 	}
 
 	return tx.Commit()
