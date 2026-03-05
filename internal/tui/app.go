@@ -289,6 +289,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case panes.SessionSelectedMsg:
 		a.selectedSession = &msg.Session
 		a.metadata.ClearSession()
+		a.setFocus(FocusConversation)
 		a.conversation.SetMessages(nil, "")
 		if a.opencodeDB != nil {
 			cmds = append(cmds, a.loadSession(msg.Session))
@@ -750,6 +751,18 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, cmd
+	}
+
+	// Cross-pane scroll: ctrl+d/u in session list scrolls conversation without switching focus (lazygit-style).
+	if a.focus == FocusSessionList && a.activeTab == TabSessions {
+		switch key {
+		case "ctrl+d":
+			a.conversation.ScrollHalfDown()
+			return a, nil
+		case "ctrl+u":
+			a.conversation.ScrollHalfUp()
+			return a, nil
+		}
 	}
 
 	if a.autoPreview && a.activeTab == TabSessions && a.focus == FocusSessionList && navKeys[key] {
@@ -1281,7 +1294,7 @@ func (a App) buildStatusBar() string {
 			if !a.hideSubAgents {
 				agentHint = "[A] hide sub-agents"
 			}
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] open  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] open ▸  [ctrl+d/u] scroll preview  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
 		}
 	case FocusConversation:
 		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search")
@@ -1315,7 +1328,8 @@ func (a App) overlayHelp(background string) string {
 
   In Session List:
   [↑ ↓ / j k]       Navigate
-  [Enter]           Open session
+  [Enter]           Open session (focus shifts to conversation)
+  [Ctrl+D / Ctrl+U] Scroll conversation preview without leaving list
   [i]               Capture idea (linked to session)
   [t]               Add tag to session
 
@@ -1351,3 +1365,4 @@ func (a App) overlayHelp(background string) string {
 		box,
 	)
 }
+

@@ -487,3 +487,15 @@ func injectSearchHighlight(plain, query string, isCurrent bool) string {
 	}
 	return sb.String()
 }
+
+// ScrollHalfDown scrolls the conversation viewport half a page down.
+// Safe to call even when the pane is not focused.
+func (c *ConversationPane) ScrollHalfDown() {
+	c.viewport.HalfViewDown()
+}
+
+// ScrollHalfUp scrolls the conversation viewport half a page up.
+// Safe to call even when the pane is not focused.
+func (c *ConversationPane) ScrollHalfUp() {
+	c.viewport.HalfViewUp()
+}
