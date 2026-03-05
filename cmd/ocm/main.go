@@ -6,6 +6,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/local/oc-manager/internal/config"
 	"github.com/local/oc-manager/internal/db"
 	tui "github.com/local/oc-manager/internal/tui"
 	"github.com/local/oc-manager/internal/tui/panes"
@@ -46,9 +47,19 @@ func main() {
 		os.Exit(0)
 	}
 
-	theme := panes.ThemeByName(os.Getenv("MIMIR_THEME"))
+	cfg := config.Load()
 
-	app := tui.NewApp(opencodeDB, managerDB, theme)
+	themeName := cfg.Theme
+	if envTheme := os.Getenv("MIMIR_THEME"); envTheme != "" {
+		themeName = envTheme
+	}
+	theme := panes.ThemeByName(themeName)
+
+	app := tui.NewApp(opencodeDB, managerDB, theme, tui.Options{
+		AutoPreview: cfg.AutoPreview,
+		ListRatio:   cfg.Layout.ListRatio,
+		MetaRatio:   cfg.Layout.MetaRatio,
+	})
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

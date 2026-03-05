@@ -18,6 +18,10 @@ type RemoveTagMsg struct {
 	TagName   string
 }
 
+type ManageSessionJumpMsg struct {
+	Session model.Session
+}
+
 type DeleteTagMsg struct{ TagName string }
 type ActivateRenameMsg struct{ TagName string }
 type ManageTagRemoveMsg struct {
@@ -219,6 +223,14 @@ func (v TagsView) SelectedTag() *TagsItem {
 	return &item
 }
 
+func (v TagsView) SelectedManageSession() *model.Session {
+	item, ok := v.manageList.SelectedItem().(ManageSessionItem)
+	if !ok {
+		return nil
+	}
+	return &item.Session
+}
+
 func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -231,13 +243,14 @@ func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 					v.manageConfirmDel = false
 					v.manageDelTarget = ""
 					v.removeManageSession(targetID)
+					removeCmd := func() tea.Msg { return ManageTagRemoveMsg{TagName: tagName, SessionID: targetID} }
 					if len(v.manageSessions) == 0 {
 						v.manageMode = false
 						v.managingTagName = ""
-						return v, func() tea.Msg { return ManageTagExitMsg{} }
+						return v, tea.Batch(removeCmd, func() tea.Msg { return ManageTagExitMsg{} })
 					}
 					v.initManageList()
-					return v, func() tea.Msg { return ManageTagRemoveMsg{TagName: tagName, SessionID: targetID} }
+					return v, removeCmd
 				case "n", "N", "esc":
 					v.manageConfirmDel = false
 					v.manageDelTarget = ""
@@ -253,6 +266,12 @@ func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 				v.manageDelTarget = ""
 				v.managingTagName = ""
 				return v, func() tea.Msg { return ManageTagExitMsg{} }
+			case "enter":
+				if item, ok := v.manageList.SelectedItem().(ManageSessionItem); ok {
+					session := item.Session
+					return v, func() tea.Msg { return ManageSessionJumpMsg{Session: session} }
+				}
+				return v, nil
 			case "d", "x":
 				if item, ok := v.manageList.SelectedItem().(ManageSessionItem); ok {
 					v.manageConfirmDel = true
@@ -281,7 +300,7 @@ func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "m":
+		case "enter":
 			if sel := v.SelectedTag(); sel != nil {
 				v.manageMode = true
 				v.managingTagName = sel.Tag.Name
@@ -300,11 +319,6 @@ func (v TagsView) Update(msg tea.Msg) (TagsView, tea.Cmd) {
 				return v, func() tea.Msg { return ActivateRenameMsg{TagName: tagName} }
 			}
 			return v, nil
-		case "enter":
-			if sel := v.SelectedTag(); sel != nil {
-				tagName := sel.Tag.Name
-				return v, func() tea.Msg { return TagFilterByNameMsg{TagName: tagName} }
-			}
 		}
 	}
 

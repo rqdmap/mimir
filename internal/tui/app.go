@@ -72,6 +72,12 @@ type sessionsBatchLoadedMsg struct {
 	done        bool
 }
 
+type Options struct {
+	AutoPreview bool
+	ListRatio   float64
+	MetaRatio   float64
+}
+
 // App is the top-level BubbleTea model.
 type App struct {
 	focus           FocusedPane
@@ -109,10 +115,14 @@ type App struct {
 	showHelp  bool
 	activeTab AppTab
 	theme     panes.Theme
+
+	autoPreview bool
+	listRatio   float64
+	metaRatio   float64
 }
 
 // NewApp creates an App with both databases wired in.
-func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme) App {
+func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App {
 	a := App{
 		focus:         FocusSessionList,
 		activeTab:     TabIdeas,
@@ -122,6 +132,9 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme) App {
 		loading:       true,
 		hideSubAgents: true,
 		theme:         theme,
+		autoPreview:   opts.AutoPreview,
+		listRatio:     opts.ListRatio,
+		metaRatio:     opts.MetaRatio,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -170,7 +183,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleKey(msg)
 
 	case sessionsBatchLoadedMsg:
-		a.sessions = append(a.sessions, msg.sessions...)
+		// Deduplicate by ID: ORDER BY time_updated DESC is unstable when
+		// opencode writes to the DB mid-load, causing sessions near batch
+		// boundaries to appear in multiple batches.
+		seenIDs := make(map[string]bool, len(a.sessions))
+		for _, s := range a.sessions {
+			seenIDs[s.ID] = true
+		}
+		for _, s := range msg.sessions {
+			if !seenIDs[s.ID] {
+				seenIDs[s.ID] = true
+				a.sessions = append(a.sessions, s)
+			}
+		}
 		for k, v := range msg.sessionTags {
 			a.sessionTags[k] = v
 		}
@@ -365,6 +390,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case ManageSessionJumpMsg:
+		a.selectedSession = &msg.Session
+		a.activeTab = TabSessions
+		a.sessionList.SelectByID(msg.Session.ID)
+		a.metadata.ClearSession()
+		a.conversation.SetMessages(nil, "")
+		if a.opencodeDB != nil {
+			cmds = append(cmds, a.loadSession(msg.Session))
+		}
+		return a, tea.Batch(cmds...)
+
 	case ManageTagExitMsg:
 		return a, nil
 
@@ -541,6 +577,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case TabIdeas:
 			a.ideasSearchQuery = ""
 		case TabTags:
+			if a.tagsView.manageMode || a.tagsView.confirmDeleteTag || a.tagsView.manageConfirmDel {
+				var cmd tea.Cmd
+				a.tagsView, cmd = a.tagsView.Update(msg)
+				a.applyFilters()
+				return a, cmd
+			}
 			a.tagsSearchQuery = ""
 		}
 		a.applyFilters()
@@ -633,6 +675,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// If in Ideas tab and session list pane focused, intercept Enter
+	navKeys := map[string]bool{
+		"j": true, "k": true, "up": true, "down": true,
+		"ctrl+d": true, "ctrl+u": true, "g": true, "G": true,
+	}
+
 	if a.activeTab == TabIdeas && a.focus == FocusSessionList {
 		if key == "enter" {
 			idea := a.ideasView.SelectedIdea()
@@ -663,13 +710,62 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// For all other keys in Ideas tab, delegate to ideasView
 		var cmd tea.Cmd
 		a.ideasView, cmd = a.ideasView.Update(msg)
+		if a.autoPreview && navKeys[key] {
+			if idea := a.ideasView.SelectedIdea(); idea != nil {
+				if idea.SourceSessionID == "" {
+					a.selectedSession = nil
+					a.metadata.ClearSession()
+					a.conversation.SetMessages(nil, "")
+				} else if a.selectedSession == nil || a.selectedSession.ID != idea.SourceSessionID {
+					for _, s := range a.sessions {
+						if s.ID == idea.SourceSessionID {
+							a.selectedSession = &s
+							a.metadata.ClearSession()
+							a.conversation.SetMessages(nil, "")
+							if a.opencodeDB != nil {
+								return a, tea.Batch(cmd, a.loadSession(s))
+							}
+							break
+						}
+					}
+				}
+			}
+		}
 		return a, cmd
 	}
 
 	if a.activeTab == TabTags && a.focus == FocusSessionList {
 		var cmd tea.Cmd
 		a.tagsView, cmd = a.tagsView.Update(msg)
+		if a.autoPreview && a.tagsView.manageMode && navKeys[key] {
+			if sel := a.tagsView.SelectedManageSession(); sel != nil {
+				if a.selectedSession == nil || a.selectedSession.ID != sel.ID {
+					a.selectedSession = sel
+					a.metadata.ClearSession()
+					a.conversation.SetMessages(nil, "")
+					if a.opencodeDB != nil {
+						return a, tea.Batch(cmd, a.loadSession(*sel))
+					}
+				}
+			}
+		}
 		return a, cmd
+	}
+
+	if a.autoPreview && a.activeTab == TabSessions && a.focus == FocusSessionList && navKeys[key] {
+		var navCmd tea.Cmd
+		a.sessionList, navCmd = a.sessionList.Update(msg)
+		if sel := a.sessionList.SelectedSession(); sel != nil {
+			if a.selectedSession == nil || sel.ID != a.selectedSession.ID {
+				a.selectedSession = sel
+				a.metadata.ClearSession()
+				a.conversation.SetMessages(nil, "")
+				if a.opencodeDB != nil {
+					return a, tea.Batch(navCmd, a.loadSession(*sel))
+				}
+			}
+		}
+		return a, navCmd
 	}
 
 	// Delegate to focused pane
@@ -689,56 +785,20 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // --- Focus management ---
 
 func (a *App) cycleFocusForward() {
-	if a.width >= 120 {
-		// 3-pane cycle
-		switch a.focus {
-		case FocusSessionList:
-			a.setFocus(FocusConversation)
-		case FocusConversation:
-			a.setFocus(FocusMetadata)
-		case FocusMetadata:
-			a.setFocus(FocusSessionList)
-		}
-	} else {
-		// 2-pane or 1-pane cycle
-		switch a.focus {
-		case FocusSessionList:
-			a.setFocus(FocusConversation)
-		case FocusConversation:
-			if a.width >= 80 {
-				a.setFocus(FocusSessionList)
-			} else {
-				a.setFocus(FocusMetadata)
-			}
-		case FocusMetadata:
-			a.setFocus(FocusSessionList)
-		}
+	switch a.focus {
+	case FocusSessionList:
+		a.setFocus(FocusConversation)
+	default:
+		a.setFocus(FocusSessionList)
 	}
 }
 
 func (a *App) cycleFocusBackward() {
-	if a.width >= 120 {
-		switch a.focus {
-		case FocusSessionList:
-			a.setFocus(FocusMetadata)
-		case FocusConversation:
-			a.setFocus(FocusSessionList)
-		case FocusMetadata:
-			a.setFocus(FocusConversation)
-		}
-	} else {
-		switch a.focus {
-		case FocusSessionList:
-			if a.width < 80 {
-				a.setFocus(FocusMetadata)
-			} else {
-				a.setFocus(FocusConversation)
-			}
-		case FocusConversation:
-			a.setFocus(FocusSessionList)
-		case FocusMetadata:
-			a.setFocus(FocusConversation)
-		}
+	switch a.focus {
+	case FocusSessionList:
+		a.setFocus(FocusConversation)
+	default:
+		a.setFocus(FocusSessionList)
 	}
 }
 
@@ -759,11 +819,17 @@ func (a *App) recalcLayout() tea.Cmd {
 	var cmds []tea.Cmd
 	var leftPaneW int
 
+	listRatio := a.listRatio
+	metaRatio := a.metaRatio
+
 	switch {
 	case a.width >= 120:
-		listW := int(float64(a.width) * 0.27)
-		convW := int(float64(a.width) * 0.57)
-		metaW := a.width - listW - convW
+		listW := int(float64(a.width) * listRatio)
+		metaW := int(float64(a.width) * metaRatio)
+		convW := a.width - listW - metaW
+		if convW < 10 {
+			convW = 10
+		}
 		leftPaneW = listW
 		a.sessionList.SetSize(listW, h-1)
 		if cmd := a.conversation.SetSize(convW, h); cmd != nil {
@@ -772,7 +838,7 @@ func (a *App) recalcLayout() tea.Cmd {
 		a.metadata.SetSize(metaW, h)
 
 	case a.width >= 80:
-		listW := int(float64(a.width) * 0.35)
+		listW := int(float64(a.width) * listRatio)
 		convW := a.width - listW
 		leftPaneW = listW
 		a.sessionList.SetSize(listW, h-1)
@@ -1209,7 +1275,7 @@ func (a App) buildStatusBar() string {
 		case TabIdeas:
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] jump to session  [/] search  [Esc] clear  [[]]] switch tab")
 		case TabTags:
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] filter  [m] manage  [d] delete  [r] rename  [/] search  [Esc] clear")
+			parts = append(parts, "[↑↓/jk] navigate  [Enter] view sessions  [d] delete  [r] rename  [/] search  [Esc] clear")
 		default:
 			agentHint := "[A] show sub-agents"
 			if !a.hideSubAgents {
@@ -1267,8 +1333,7 @@ func (a App) overlayHelp(background string) string {
   [d]               Delete idea (confirm y/n)
 
   In Tags Tab:
-  [Enter]           Filter sessions by tag
-  [m]               Manage sessions for tag
+  [Enter]           View sessions with tag
   [d]               Delete tag
   [r]               Rename tag`
 
