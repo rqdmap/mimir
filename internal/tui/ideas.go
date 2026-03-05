@@ -119,6 +119,7 @@ func (v *IdeasView) SetFilter(q string) {
 }
 
 func (v *IdeasView) applyFilter() {
+	wasEmpty := len(v.list.Items()) == 0
 	q := strings.ToLower(v.searchFilter)
 	var items []list.Item
 	for _, idea := range v.ideas {
@@ -127,6 +128,9 @@ func (v *IdeasView) applyFilter() {
 		}
 	}
 	v.list.SetItems(items)
+	if wasEmpty && len(items) > 0 {
+		v.list.Select(0)
+	}
 }
 
 func (v *IdeasView) SetSize(width, height int) tea.Cmd {

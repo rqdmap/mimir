@@ -499,3 +499,15 @@ func (c *ConversationPane) ScrollHalfDown() {
 func (c *ConversationPane) ScrollHalfUp() {
 	c.viewport.HalfViewUp()
 }
+
+// ScrollLineDown scrolls the conversation viewport one line down.
+// Safe to call even when the pane is not focused (for mouse scroll cross-pane).
+func (c *ConversationPane) ScrollLineDown(n int) {
+	c.viewport.LineDown(n)
+}
+
+// ScrollLineUp scrolls the conversation viewport one line up.
+// Safe to call even when the pane is not focused (for mouse scroll cross-pane).
+func (c *ConversationPane) ScrollLineUp(n int) {
+	c.viewport.LineUp(n)
+}

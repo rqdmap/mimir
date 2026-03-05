@@ -182,6 +182,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 
+	case tea.MouseMsg:
+		if msg.Type == tea.MouseWheelDown && a.focus == FocusSessionList && a.activeTab == TabSessions {
+			a.conversation.ScrollLineDown(3)
+			return a, nil
+		}
+		if msg.Type == tea.MouseWheelUp && a.focus == FocusSessionList && a.activeTab == TabSessions {
+			a.conversation.ScrollLineUp(3)
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.conversation, cmd = a.conversation.Update(msg)
+		return a, cmd
+
 	case sessionsBatchLoadedMsg:
 		// Deduplicate by ID: ORDER BY time_updated DESC is unstable when
 		// opencode writes to the DB mid-load, causing sessions near batch
@@ -615,11 +628,17 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "[":
 		a.activeTab = (a.activeTab + 1) % 3
 		a.setFocus(FocusSessionList)
+		if a.activeTab == TabSessions {
+			return a, a.tryAutoLoadSelected()
+		}
 		return a, nil
 
 	case "]":
 		a.activeTab = (a.activeTab + 2) % 3
 		a.setFocus(FocusSessionList)
+		if a.activeTab == TabSessions {
+			return a, a.tryAutoLoadSelected()
+		}
 		return a, nil
 
 	case KeyIdeas:
@@ -738,14 +757,25 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.activeTab == TabTags && a.focus == FocusSessionList {
 		var cmd tea.Cmd
 		a.tagsView, cmd = a.tagsView.Update(msg)
-		if a.autoPreview && a.tagsView.manageMode && navKeys[key] {
-			if sel := a.tagsView.SelectedManageSession(); sel != nil {
-				if a.selectedSession == nil || a.selectedSession.ID != sel.ID {
+		if a.tagsView.manageMode {
+			if key == "enter" {
+				if sel := a.tagsView.SelectedManageSession(); sel != nil {
 					a.selectedSession = sel
 					a.metadata.ClearSession()
 					a.conversation.SetMessages(nil, "")
 					if a.opencodeDB != nil {
 						return a, tea.Batch(cmd, a.loadSession(*sel))
+					}
+				}
+			} else if a.autoPreview && navKeys[key] {
+				if sel := a.tagsView.SelectedManageSession(); sel != nil {
+					if a.selectedSession == nil || a.selectedSession.ID != sel.ID {
+						a.selectedSession = sel
+						a.metadata.ClearSession()
+						a.conversation.SetMessages(nil, "")
+						if a.opencodeDB != nil {
+							return a, tea.Batch(cmd, a.loadSession(*sel))
+						}
 					}
 				}
 			}
@@ -1181,6 +1211,23 @@ func (a *App) applyFilters() {
 	a.tagsView.SetSessions(a.sessions, a.sessionTags)
 }
 
+func (a *App) tryAutoLoadSelected() tea.Cmd {
+	sel := a.sessionList.SelectedSession()
+	if sel == nil {
+		return nil
+	}
+	if a.selectedSession != nil && sel.ID == a.selectedSession.ID {
+		return nil
+	}
+	a.selectedSession = sel
+	a.metadata.ClearSession()
+	a.conversation.SetMessages(nil, "")
+	if a.opencodeDB != nil {
+		return a.loadSession(*sel)
+	}
+	return nil
+}
+
 // --- Additional async message types for metadata refresh ---
 
 type sessionMetaRefreshedMsg struct {
@@ -1365,4 +1412,3 @@ func (a App) overlayHelp(background string) string {
 		box,
 	)
 }
-

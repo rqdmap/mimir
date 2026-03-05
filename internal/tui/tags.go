@@ -163,6 +163,7 @@ func (v *TagsView) SetSessions(sessions []model.Session, sessionTags map[string]
 }
 
 func (v *TagsView) applyFilter() {
+	wasEmpty := len(v.list.Items()) == 0
 	q := strings.ToLower(v.searchFilter)
 	var items []list.Item
 	for _, t := range v.tags {
@@ -171,6 +172,9 @@ func (v *TagsView) applyFilter() {
 		}
 	}
 	v.list.SetItems(items)
+	if wasEmpty && len(items) > 0 {
+		v.list.Select(0)
+	}
 }
 
 func (v *TagsView) filterManageSessions() {
@@ -193,6 +197,9 @@ func (v *TagsView) initManageList() {
 		items = append(items, ManageSessionItem{Session: s})
 	}
 	v.manageList.SetItems(items)
+	if len(items) > 0 {
+		v.manageList.Select(0)
+	}
 	v.manageList.Title = "Sessions with #" + v.managingTagName
 }
 

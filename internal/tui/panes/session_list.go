@@ -83,6 +83,7 @@ func NewSessionList(width, height int, theme Theme) SessionList {
 
 // SetSessions updates the displayed sessions.
 func (s *SessionList) SetSessions(sessions []model.Session, tags map[string][]string) {
+	wasEmpty := len(s.list.Items()) == 0
 	items := make([]list.Item, len(sessions))
 	for i, sess := range sessions {
 		t := []string{}
@@ -95,6 +96,9 @@ func (s *SessionList) SetSessions(sessions []model.Session, tags map[string][]st
 		}
 	}
 	s.list.SetItems(items)
+	if wasEmpty && len(items) > 0 {
+		s.list.Select(0)
+	}
 	s.list.Title = fmt.Sprintf("Sessions (%d)", len(sessions))
 }
 
