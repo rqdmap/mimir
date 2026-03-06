@@ -584,6 +584,10 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case "esc":
+		if a.focus == FocusConversation {
+			a.setFocus(FocusSessionList)
+			return a, nil
+		}
 		switch a.activeTab {
 		case TabSessions:
 			a.searchQuery = ""
@@ -1344,7 +1348,7 @@ func (a App) buildStatusBar() string {
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] open ▸  [ctrl+d/u] scroll preview  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
 		}
 	case FocusConversation:
-		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search")
+		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search  [Esc] back to list")
 	case FocusMetadata:
 		parts = append(parts, "[[] ideas  []] sessions  [T] tags")
 	}
@@ -1386,6 +1390,7 @@ func (a App) overlayHelp(background string) string {
   [g / G]           Top / bottom
   [/]               Search conversation
   [n / N]           Next / prev match
+  [Esc]             Return focus to session list
   [Esc / Enter]     Exit search
 
   In Ideas Tab:
