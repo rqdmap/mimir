@@ -760,16 +760,19 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if a.activeTab == TabTags && a.focus == FocusSessionList {
 		var cmd tea.Cmd
+		wasManageMode := a.tagsView.manageMode
 		a.tagsView, cmd = a.tagsView.Update(msg)
-		if a.tagsView.manageMode {
+		if wasManageMode {
 			if key == "enter" {
 				if sel := a.tagsView.SelectedManageSession(); sel != nil {
 					a.selectedSession = sel
 					a.metadata.ClearSession()
 					a.conversation.SetMessages(nil, "")
+					a.setFocus(FocusConversation)
 					if a.opencodeDB != nil {
-						return a, tea.Batch(cmd, a.loadSession(*sel))
+						return a, a.loadSession(*sel)
 					}
+					return a, nil
 				}
 			} else if a.autoPreview && navKeys[key] {
 				if sel := a.tagsView.SelectedManageSession(); sel != nil {
