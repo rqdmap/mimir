@@ -3,12 +3,15 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/db"
+	"github.com/local/oc-manager/internal/export"
 	"github.com/local/oc-manager/internal/model"
 	"github.com/local/oc-manager/internal/tui/panes"
 )
@@ -76,6 +79,7 @@ type Options struct {
 	AutoPreview bool
 	ListRatio   float64
 	MetaRatio   float64
+	ExportDir   string
 }
 
 // App is the top-level BubbleTea model.
@@ -97,8 +101,11 @@ type App struct {
 	height int
 	err    string
 
-	inputMode InputMode
-	tagsView  TagsView
+	inputMode    InputMode
+	tagsView     TagsView
+	exportOverlay ExportOverlay
+	exportDir    string
+	exportFlash  string // temporary success/error message shown in status bar
 
 	searchMode  bool
 	searchQuery string
@@ -135,6 +142,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 		autoPreview:   opts.AutoPreview,
 		listRatio:     opts.ListRatio,
 		metaRatio:     opts.MetaRatio,
+		exportDir:     opts.ExportDir,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -149,6 +157,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 	a.ideasView = NewIdeasView(0, 0, theme)
 	a.inputMode = NewInputMode(0, 0, theme)
 	a.tagsView = NewTagsView(0, 0, theme)
+	a.exportOverlay = NewExportOverlay(0, 0, theme)
 
 	a.sessionList.SetFocused(true)
 	a.sessionList.SetLoading(true)
@@ -164,6 +173,13 @@ func (a App) Init() tea.Cmd {
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Export overlay takes priority over inputMode
+	if a.exportOverlay.IsActive() {
+		var cmd tea.Cmd
+		a.exportOverlay, cmd = a.exportOverlay.Update(msg)
+		return a, cmd
+	}
 
 	if a.inputMode.IsActive() {
 		var cmd tea.Cmd
@@ -428,6 +444,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyFilters()
 		return a, nil
 
+	case ExportConfirmedMsg:
+		if a.selectedSession == nil {
+			a.exportFlash = "✗ No session selected"
+			return a, nil
+		}
+		sess := *a.selectedSession
+		msgs := a.conversation.Messages()
+		tags := a.sessionTags[sess.ID]
+		opts := export.Options{
+			IncludeMetadata:  msg.IncludeMetadata,
+			IncludeText:      msg.IncludeText,
+			IncludeTool:      msg.IncludeTool,
+			IncludeReasoning: msg.IncludeReasoning,
+		}
+		dir := a.exportDir
+		return a, a.doExport(sess, msgs, tags, opts, dir)
+
+	case ExportCancelledMsg:
+		return a, nil
+
+	case ExportDoneMsg:
+		if msg.Err != nil {
+			a.exportFlash = "✗ Export failed: " + msg.Err.Error()
+		} else {
+			a.exportFlash = "✓ Exported → " + msg.Path
+		}
+		return a, nil
+
 	}
 
 	if a.activeTab == TabIdeas {
@@ -462,6 +506,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) View() string {
+	// Export overlay takes full screen when active.
+	if a.exportOverlay.IsActive() {
+		return a.exportOverlay.View()
+	}
+
 	// InputMode overlay takes full screen when active.
 	if a.inputMode.IsActive() {
 		return a.inputMode.View()
@@ -622,6 +671,16 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, a.loadIdeas()
 		case TabTags:
 			return a, a.loadTagsWithCounts()
+		}
+		return a, nil
+
+	case KeyExport:
+		if a.selectedSession != nil {
+			a.exportFlash = ""
+			a.exportOverlay.SetSize(a.width, a.height)
+			a.exportOverlay.Activate()
+		} else {
+			a.exportFlash = "✗ No session selected"
 		}
 		return a, nil
 
@@ -912,6 +971,7 @@ func (a *App) recalcLayout() tea.Cmd {
 
 	a.inputMode.width = a.width
 	a.inputMode.height = a.height
+	a.exportOverlay.SetSize(a.width, a.height)
 	a.tagsView.SetSize(leftPaneW, h-1)
 	return tea.Batch(cmds...)
 }
@@ -1234,6 +1294,26 @@ func (a *App) tryAutoLoadSelected() tea.Cmd {
 	}
 	return nil
 }
+// doExport writes the session as a Markdown file asynchronously.
+func (a App) doExport(sess model.Session, messages []model.Message, tags []string, opts export.Options, dir string) tea.Cmd {
+	return func() tea.Msg {
+		md := export.RenderMarkdown(sess, messages, tags, opts)
+		if dir == "" {
+			var err error
+			dir, err = os.Getwd()
+			if err != nil {
+				return ExportDoneMsg{Err: err}
+			}
+		}
+		slug := export.Slugify(sess.Title)
+		path := filepath.Join(dir, slug+".md")
+		if err := os.WriteFile(path, []byte(md), 0644); err != nil {
+			return ExportDoneMsg{Err: err}
+		}
+		return ExportDoneMsg{Path: path}
+	}
+}
+
 
 // --- Additional async message types for metadata refresh ---
 
@@ -1361,6 +1441,14 @@ func (a App) buildStatusBar() string {
 	statusText := strings.Join(parts, "  │  ")
 	bar := statusStyle.Render(statusText)
 
+	if a.exportFlash != "" {
+		flashStyle := lipgloss.NewStyle().Foreground(a.theme.BorderFocused)
+		if strings.HasPrefix(a.exportFlash, "✗") {
+			flashStyle = errStyle
+		}
+		return bar + flashStyle.Render("  " + a.exportFlash)
+	}
+
 	if a.err != "" {
 		return bar + errStyle.Render("  ✗ "+a.err)
 	}
@@ -1385,6 +1473,7 @@ func (a App) overlayHelp(background string) string {
   [Enter]           Open session (focus shifts to conversation)
   [Ctrl+D / Ctrl+U] Scroll conversation preview without leaving list
   [i]               Capture idea (linked to session)
+  [Ctrl+E]          Export session as Markdown
   [t]               Add tag to session
 
   In Conversation:

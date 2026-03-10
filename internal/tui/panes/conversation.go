@@ -106,10 +106,11 @@ func (c *ConversationPane) clearConvSearch() {
 	c.plainLines = nil
 }
 
-func (c ConversationPane) SearchMode() bool      { return c.convSearchMode }
-func (c ConversationPane) SearchQuery() string   { return c.convSearchQuery }
-func (c ConversationPane) SearchMatchCount() int { return len(c.convSearchMatches) }
-func (c ConversationPane) SearchMatchIdx() int   { return c.convSearchIdx }
+func (c ConversationPane) SearchMode() bool          { return c.convSearchMode }
+func (c ConversationPane) SearchQuery() string        { return c.convSearchQuery }
+func (c ConversationPane) SearchMatchCount() int      { return len(c.convSearchMatches) }
+func (c ConversationPane) SearchMatchIdx() int        { return c.convSearchIdx }
+func (c ConversationPane) Messages() []model.Message  { return c.messages }
 
 // SetFocused controls focus state (affects border styling).
 func (c *ConversationPane) SetFocused(focused bool) {
