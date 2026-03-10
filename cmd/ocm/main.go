@@ -59,6 +59,7 @@ func main() {
 		AutoPreview: cfg.AutoPreview,
 		ListRatio:   cfg.Layout.ListRatio,
 		MetaRatio:   cfg.Layout.MetaRatio,
+		ExportDir:   cfg.ExportDir,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

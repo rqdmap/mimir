@@ -15,12 +15,14 @@ type Config struct {
 	AutoPreview bool         `json:"auto_preview"`
 	Theme       string       `json:"theme"`
 	Layout      LayoutConfig `json:"layout"`
+	ExportDir   string       `json:"export_dir"` // directory for exported markdown files; defaults to cwd
 }
 
 func defaultConfig() Config {
 	return Config{
 		AutoPreview: false,
 		Theme:       "",
+		ExportDir:   "",
 		Layout: LayoutConfig{
 			ListRatio: 0.27,
 			MetaRatio: 0.16,

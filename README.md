@@ -16,6 +16,7 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
 - **Batch loading** — sessions load progressively in the background (no startup freeze)
 - **Progress bar** — real `X/N` loading indicator in the status bar
 - **Sub-agent filtering** — toggle visibility of sub-agent sessions with `h`
+- **Markdown export** — export any session as a `.md` file with selectable content (messages, metadata, tool calls, reasoning)
 
 ## Screenshot
 
@@ -65,6 +66,7 @@ ocm --list-sessions    # Print all sessions to stdout and exit
 | `r` | Refresh sessions |
 | `?` | Show help overlay |
 | `q` / `Esc` | Quit / close overlay |
+| `Ctrl+E` | Export session as Markdown |
 
 ## How It Works
 
