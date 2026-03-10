@@ -10,4 +10,5 @@ const (
 	KeyTag       = "t"
 	KeyTagFilter = "T"
 	KeyIdea      = "i"
+	KeyExport    = "ctrl+e"
 )
