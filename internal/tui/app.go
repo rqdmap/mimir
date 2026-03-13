@@ -53,6 +53,13 @@ type ideasLoadedMsg struct {
 
 type errMsg struct{ err string }
 
+type clearFlashMsg struct{}
+
+type flashMsg struct {
+	text    string
+	isError bool
+}
+
 type sessionIdeasRefreshedMsg struct {
 	ideas []model.Idea
 }
@@ -77,10 +84,13 @@ type sessionsBatchLoadedMsg struct {
 }
 
 type Options struct {
-	AutoPreview bool
-	Ratio       [3]int
-	TabOrder    []string
-	ExportDir   string
+	AutoPreview         bool
+	Ratio               [3]int
+	TabOrder            []string
+	ExportDir           string
+	TriliumURL          string
+	TriliumToken        string
+	TriliumParentNoteID string
 }
 
 // App is the top-level BubbleTea model.
@@ -102,14 +112,16 @@ type App struct {
 	height int
 	err    string
 
-	inputMode     InputMode
-	tagsView      TagsView
-	exportOverlay ExportOverlay
-	exportDir     string
-	exportFlash   string // temporary success/error message shown in status bar
-
-	searchMode  bool
-	searchQuery string
+	inputMode           InputMode
+	tagsView            TagsView
+	exportOverlay       ExportOverlay
+	exportDir           string
+	triliumURL          string
+	triliumToken        string
+	triliumParentNoteID string
+	flash               flashMsg
+	searchMode          bool
+	searchQuery         string
 
 	ideasSearchQuery string
 	tagsSearchQuery  string
@@ -164,18 +176,21 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 		defaultTab = tabNameToAppTab(opts.TabOrder[0])
 	}
 	a := App{
-		focus:         FocusSessionList,
-		activeTab:     defaultTab,
-		sessionTags:   make(map[string][]string),
-		opencodeDB:    opencodeDB,
-		managerDB:     managerDB,
-		loading:       true,
-		hideSubAgents: true,
-		theme:         theme,
-		autoPreview:   opts.AutoPreview,
-		ratio:         opts.Ratio,
-		tabOrder:      opts.TabOrder,
-		exportDir:     opts.ExportDir,
+		focus:               FocusSessionList,
+		activeTab:           defaultTab,
+		sessionTags:         make(map[string][]string),
+		opencodeDB:          opencodeDB,
+		managerDB:           managerDB,
+		loading:             true,
+		hideSubAgents:       true,
+		theme:               theme,
+		autoPreview:         opts.AutoPreview,
+		ratio:               opts.Ratio,
+		tabOrder:            opts.TabOrder,
+		exportDir:           opts.ExportDir,
+		triliumURL:          opts.TriliumURL,
+		triliumToken:        opts.TriliumToken,
+		triliumParentNoteID: opts.TriliumParentNoteID,
 	}
 
 	// Run idempotent migrations (note → idea, etc.)
@@ -190,7 +205,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 	a.ideasView = NewIdeasView(0, 0, theme)
 	a.inputMode = NewInputMode(0, 0, theme)
 	a.tagsView = NewTagsView(0, 0, theme)
-	a.exportOverlay = NewExportOverlay(0, 0, theme)
+	a.exportOverlay = NewExportOverlay(0, 0, theme, opts.TriliumURL != "" && opts.TriliumToken != "")
 
 	a.sessionList.SetFocused(true)
 	a.sessionList.SetLoading(true)
@@ -509,7 +524,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ExportConfirmedMsg:
 		if a.selectedSession == nil {
-			a.exportFlash = "✗ No session selected"
+			a.flash = flashMsg{text: "No session selected", isError: true}
 			return a, nil
 		}
 		sess := *a.selectedSession
@@ -522,16 +537,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			IncludeReasoning: msg.IncludeReasoning,
 		}
 		dir := a.exportDir
+		if msg.Destination == "trilium" {
+			return a, a.doExportTrilium(sess, msgs, tags, opts)
+		}
 		return a, a.doExport(sess, msgs, tags, opts, dir)
-
 	case ExportCancelledMsg:
 		return a, nil
 
 	case ExportDoneMsg:
 		if msg.Err != nil {
-			a.exportFlash = "✗ Export failed: " + msg.Err.Error()
+			a.flash = flashMsg{text: msg.Err.Error(), isError: true}
 		} else {
-			a.exportFlash = "✓ Exported → " + msg.Path
+			a.flash = flashMsg{text: "Exported → " + msg.Path}
 		}
 		return a, nil
 
@@ -756,11 +773,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case KeyExport:
 		if a.selectedSession != nil {
-			a.exportFlash = ""
+			a.flash = flashMsg{}
 			a.exportOverlay.SetSize(a.width, a.height)
 			a.exportOverlay.Activate()
 		} else {
-			a.exportFlash = "✗ No session selected"
+			a.flash = flashMsg{text: "No session selected", isError: true}
 		}
 		return a, nil
 
@@ -1469,6 +1486,20 @@ func (a App) openIdeaInEditor(ideaID, content string) tea.Cmd {
 	})
 }
 
+func (a App) doExportTrilium(sess model.Session, messages []model.Message, tags []string, opts export.Options) tea.Cmd {
+	triliumURL := a.triliumURL
+	triliumToken := a.triliumToken
+	triliumParent := a.triliumParentNoteID
+	return func() tea.Msg {
+		md := export.RenderMarkdown(sess, messages, tags, opts)
+		cfg := export.TriliumConfig{URL: triliumURL, Token: triliumToken, ParentNoteID: triliumParent}
+		if err := export.UploadSession(cfg, sess.Title, md); err != nil {
+			return ExportDoneMsg{Err: err}
+		}
+		return ExportDoneMsg{Path: "Trilium: " + sess.Title}
+	}
+}
+
 // --- Additional async message types for metadata refresh ---
 
 type sessionMetaRefreshedMsg struct {
@@ -1601,14 +1632,6 @@ func (a App) buildStatusBar() string {
 
 	statusText := strings.Join(parts, "  │  ")
 	bar := statusStyle.Render(statusText)
-
-	if a.exportFlash != "" {
-		flashStyle := lipgloss.NewStyle().Foreground(a.theme.BorderFocused)
-		if strings.HasPrefix(a.exportFlash, "✗") {
-			flashStyle = errStyle
-		}
-		return bar + flashStyle.Render("  "+a.exportFlash)
-	}
 
 	if a.err != "" {
 		return bar + errStyle.Render("  ✗ "+a.err)

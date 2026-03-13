@@ -12,6 +12,7 @@ type ExportConfirmedMsg struct {
 	IncludeText      bool
 	IncludeTool      bool
 	IncludeReasoning bool
+	Destination      string // "local" or "trilium"
 }
 
 // ExportCancelledMsg is sent when the user cancels the export overlay.
@@ -37,16 +38,19 @@ type ExportOverlay struct {
 	width  int
 	height int
 	theme  panes.Theme
+	destination       int  // 0=local, 1=trilium
+	triliumConfigured bool // whether Trilium URL+Token are set
 }
 
-func NewExportOverlay(width, height int, theme panes.Theme) ExportOverlay {
+func NewExportOverlay(width, height int, theme panes.Theme, triliumConfigured bool) ExportOverlay {
 	return ExportOverlay{
-		width:  width,
-		height: height,
-		theme:  theme,
+		width:             width,
+		height:            height,
+		theme:             theme,
+		triliumConfigured: triliumConfigured,
 		items: []exportItem{
 			{"Conversation text (user & assistant)", true},
-			{"Session metadata (ID, directory, tags…)", true},
+			{"Session metadata (ID, directory, tags\u2026)", true},
 			{"Tool calls (name, input, output)", false},
 			{"Reasoning / thinking blocks", false},
 		},
@@ -82,6 +86,13 @@ func (e ExportOverlay) Update(msg tea.Msg) (ExportOverlay, tea.Cmd) {
 		e.active = false
 		return e, func() tea.Msg { return ExportCancelledMsg{} }
 
+	case "left", "h":
+		e.destination = 0
+	case "right", "l":
+		if e.triliumConfigured {
+			e.destination = 1
+		}
+
 	case "up", "k":
 		if e.cursor > 0 {
 			e.cursor--
@@ -105,12 +116,17 @@ func (e ExportOverlay) Update(msg tea.Msg) (ExportOverlay, tea.Cmd) {
 }
 
 func (e ExportOverlay) buildOpts() ExportConfirmedMsg {
+	dest := "local"
+	if e.destination == 1 {
+		dest = "trilium"
+	}
 	// item order must match the slice in Activate / NewExportOverlay
 	return ExportConfirmedMsg{
 		IncludeText:      e.items[0].enabled,
 		IncludeMetadata:  e.items[1].enabled,
 		IncludeTool:      e.items[2].enabled,
 		IncludeReasoning: e.items[3].enabled,
+		Destination:      dest,
 	}
 }
 
@@ -136,6 +152,21 @@ func (e ExportOverlay) View() string {
 		"",
 	}
 
+	// Destination row
+	localStr := "[ Local ]"
+	triliumStr := "[ Trilium ]"
+	if !e.triliumConfigured {
+		triliumStr = "[ Trilium (not configured) ]"
+	}
+	var destLine string
+	if e.destination == 0 {
+		destLine = selectedStyle.Render(localStr) + "  " + hintStyle.Render(triliumStr)
+	} else {
+		destLine = hintStyle.Render(localStr) + "  " + selectedStyle.Render(triliumStr)
+	}
+	lines = append(lines, normalStyle.Render("Destination:  ")+destLine)
+	lines = append(lines, "")
+
 	for i, item := range e.items {
 		check := "[ ]"
 		if item.enabled {
@@ -151,7 +182,7 @@ func (e ExportOverlay) View() string {
 
 	lines = append(lines,
 		"",
-		hintStyle.Render("[↑↓/jk] navigate  [Space] toggle  [Enter] export  [Esc] cancel"),
+		hintStyle.Render("[\u2190\u2192/hl] dest  [\u2191\u2193/jk] navigate  [Space] toggle  [Enter] export  [Esc] cancel"),
 	)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)

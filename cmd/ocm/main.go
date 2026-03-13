@@ -56,10 +56,13 @@ func main() {
 	theme := panes.ThemeByName(themeName)
 
 	app := tui.NewApp(opencodeDB, managerDB, theme, tui.Options{
-		AutoPreview: cfg.AutoPreview,
-		Ratio:       config.NormalizeRatio(cfg.Layout.Ratio),
-		TabOrder:    config.NormalizeTabOrder(cfg.Layout.TabOrder),
-		ExportDir:   cfg.ExportDir,
+		AutoPreview:         cfg.AutoPreview,
+		Ratio:               config.NormalizeRatio(cfg.Layout.Ratio),
+		TabOrder:            config.NormalizeTabOrder(cfg.Layout.TabOrder),
+		ExportDir:           cfg.ExportDir,
+		TriliumURL:          cfg.TriliumURL,
+		TriliumToken:        cfg.TriliumToken,
+		TriliumParentNoteID: cfg.TriliumParentNoteID,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
