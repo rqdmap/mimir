@@ -20,6 +20,7 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
 - **Idea notebook** — capture ideas linked to sessions; idea body rendered in the conversation pane, `Tab` toggles between idea content and linked session conversation; `E` opens idea in `$EDITOR`
 - **Tag management** — create, rename, delete tags; filter sessions by tag; manage tag-session associations
 - **Markdown export** — export any session as `.md` with selectable content (messages, metadata, tool calls, reasoning)
+- **Trilium export** — export sessions directly to [Trilium Notes](https://github.com/TriliumNext/Notes) via ETAPI; renders with full Markdown formatting (headings, code blocks, tables); upserts by title so re-exporting updates in place
 - **Responsive layout** — automatically adapts between 3-pane (>=120 cols), 2-pane (>=80), and single-pane views
 - **Progressive loading** — sessions load in background batches of 100 with a live `X/N` progress indicator
 - **Theming** — built-in Gruvbox (default) and classic themes, configurable via `config.json` or `MIMIR_THEME`
@@ -72,6 +73,26 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
 
 The theme can also be overridden with the `MIMIR_THEME` environment variable.
 
+### Trilium Notes Integration
+
+To enable Trilium export, add the following fields to `config.json`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `trilium_url` | `""` | Base URL of your Trilium instance (e.g. `http://localhost:8080`) |
+| `trilium_token` | `""` | ETAPI authentication token |
+| `trilium_parent_note_id` | `"root"` | Note ID of the parent note for exports |
+
+```json
+{
+  "trilium_url": "http://localhost:8080",
+  "trilium_token": "YOUR_ETAPI_TOKEN",
+  "trilium_parent_note_id": "root"
+}
+```
+
+To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and create a new token. To find a note's ID, right-click it in Trilium and select **Note Info**.
+
 ## Keybindings
 
 ### Global
@@ -86,7 +107,7 @@ The theme can also be overridden with the `MIMIR_THEME` environment variable.
 | `/` | Search within current tab or conversation |
 | `r` | Refresh current tab |
 | `i` | Capture a new idea (linked to selected session if on Sessions tab) |
-| `Ctrl+E` | Export selected session as Markdown |
+| `Ctrl+E` | Export selected session (Local Markdown or Trilium Notes) |
 | `?` | Show help overlay |
 | `q` / `Ctrl+C` | Quit |
 | `Esc` | Clear search / close overlay / return focus to list |
@@ -136,6 +157,8 @@ The theme can also be overridden with the `MIMIR_THEME` environment variable.
 Mimir reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) in **read-only** mode — it never writes to OpenCode's data.
 
 It also maintains its own manager database alongside it for user-created metadata: tags, ideas, and session associations. Sessions are loaded progressively in batches of 100 so the UI stays responsive from the first keypress.
+
+For Trilium exports, session content is converted from Markdown to HTML via `goldmark` before upload — Trilium's `text` note type is an HTML editor, so this ensures headings, bold, code blocks, and tables all render correctly.
 
 ## License
 
