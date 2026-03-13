@@ -25,6 +25,9 @@ type Config struct {
 	Theme       string       `json:"theme"`
 	Layout      LayoutConfig `json:"layout"`
 	ExportDir   string       `json:"export_dir"` // directory for exported markdown files; defaults to cwd
+	TriliumURL      string `json:"trilium_url"`           // e.g. "http://localhost:8080"
+	TriliumToken    string `json:"trilium_token"`         // ETAPI auth token
+	TriliumParentNoteID string `json:"trilium_parent_note_id"` // parent note; defaults to "root"
 }
 
 func defaultConfig() Config {
@@ -36,6 +39,7 @@ func defaultConfig() Config {
 			Ratio:    append([]int{}, DefaultRatio...),
 			TabOrder: append([]string{}, DefaultTabOrder...),
 		},
+		TriliumParentNoteID: "root",
 	}
 }
 
