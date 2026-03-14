@@ -89,6 +89,9 @@ func (m MetadataPane) View() string {
 		Height(m.height-2).
 		Padding(0, 1)
 
+	if m.ideaMode && m.selectedIdea != nil && m.selectedIdea.SourceSessionID == "" {
+		return style.Align(lipgloss.Center, lipgloss.Center).Render("No linked session")
+	}
 	if !m.hasSession {
 		return style.Align(lipgloss.Center, lipgloss.Center).Render("Select a session\nto view details.")
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -123,9 +124,10 @@ type App struct {
 	activeTab AppTab
 	theme     panes.Theme
 
-	autoPreview bool
-	listRatio   float64
-	metaRatio   float64
+	autoPreview  bool
+	listRatio    float64
+	metaRatio    float64
+	ideaShowConv bool
 }
 
 // NewApp creates an App with both databases wired in.
@@ -168,7 +170,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 // --- tea.Model interface ---
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.startProgressiveLoad(), a.loadIdeas(), a.loadTagsWithCounts())
+	return tea.Batch(a.startProgressiveLoad(), a.loadIdeas(), a.loadTagsWithCounts(), tea.EnableBracketedPaste)
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -249,12 +251,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionLoadedMsg:
-		cmd := a.conversation.SetMessages(msg.messages, msg.meta.SessionID)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
+		if a.activeTab != TabIdeas || a.ideaShowConv {
+			cmd := a.conversation.SetMessages(msg.messages, msg.meta.SessionID)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			a.metadata.SetSessionMeta(msg.meta)
+			a.metadata.SetMessageCount(len(msg.messages))
 		}
-		a.metadata.SetSessionMeta(msg.meta)
-		a.metadata.SetMessageCount(len(msg.messages))
 		a.err = ""
 		if a.managerDB != nil && msg.meta.SessionID != "" {
 			cmds = append(cmds, a.reloadSessionIdeas(msg.meta.SessionID))
@@ -345,6 +349,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
+	case IdeaSelectedMsg:
+		if a.activeTab != TabIdeas {
+			return a, nil
+		}
+		a.ideaShowConv = false
+		a.conversation.SetIdeaContent(msg.Idea.Content)
+		a.metadata.SetIdeaMeta(msg.Idea, "")
+		if msg.Idea.SourceSessionID != "" {
+			for _, s := range a.sessions {
+				if s.ID == msg.Idea.SourceSessionID {
+					a.metadata.SetIdeaMeta(msg.Idea, s.Title)
+					break
+				}
+			}
+		}
+		return a, nil
+
 	case IdeaSessionRequestMsg:
 		for _, s := range a.sessions {
 			if s.ID == msg.SessionID {
@@ -356,6 +377,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				break
 			}
+		}
+		return a, tea.Batch(cmds...)
+
+	case editorDoneMsg:
+		if msg.err != nil {
+			a.err = fmt.Sprintf("editor: %v", msg.err)
+			return a, nil
+		}
+		if msg.content != "" && a.managerDB != nil {
+			_ = db.UpdateIdea(a.managerDB, msg.ideaID, msg.content)
+			cmds = append(cmds, a.loadIdeas())
 		}
 		return a, tea.Batch(cmds...)
 
@@ -591,6 +623,20 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Search mode — intercept all keys
 	if a.searchMode {
+		// Bracketed paste: msg.Paste == true, content in msg.Runes
+		if msg.Paste {
+			pastedText := string(msg.Runes)
+			switch a.activeTab {
+			case TabSessions:
+				a.searchQuery += pastedText
+			case TabIdeas:
+				a.ideasSearchQuery += pastedText
+			case TabTags:
+				a.tagsSearchQuery += pastedText
+			}
+			a.applyFilters()
+			return a, nil
+		}
 		switch key {
 		case "esc":
 			a.searchMode = false
@@ -599,27 +645,30 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "backspace":
 			switch a.activeTab {
 			case TabSessions:
-				if len(a.searchQuery) > 0 {
-					a.searchQuery = a.searchQuery[:len(a.searchQuery)-1]
+				if len([]rune(a.searchQuery)) > 0 {
+					runes := []rune(a.searchQuery)
+					a.searchQuery = string(runes[:len(runes)-1])
 				}
 			case TabIdeas:
-				if len(a.ideasSearchQuery) > 0 {
-					a.ideasSearchQuery = a.ideasSearchQuery[:len(a.ideasSearchQuery)-1]
+				if len([]rune(a.ideasSearchQuery)) > 0 {
+					runes := []rune(a.ideasSearchQuery)
+					a.ideasSearchQuery = string(runes[:len(runes)-1])
 				}
 			case TabTags:
-				if len(a.tagsSearchQuery) > 0 {
-					a.tagsSearchQuery = a.tagsSearchQuery[:len(a.tagsSearchQuery)-1]
+				if len([]rune(a.tagsSearchQuery)) > 0 {
+					runes := []rune(a.tagsSearchQuery)
+					a.tagsSearchQuery = string(runes[:len(runes)-1])
 				}
 			}
 		default:
-			if len(key) == 1 {
+			if msg.Type == tea.KeyRunes {
 				switch a.activeTab {
 				case TabSessions:
-					a.searchQuery += key
+					a.searchQuery += string(msg.Runes)
 				case TabIdeas:
-					a.ideasSearchQuery += key
+					a.ideasSearchQuery += string(msg.Runes)
 				case TabTags:
-					a.tagsSearchQuery += key
+					a.tagsSearchQuery += string(msg.Runes)
 				}
 			}
 		}
@@ -691,23 +740,17 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "[":
 		a.activeTab = (a.activeTab + 1) % 3
 		a.setFocus(FocusSessionList)
-		if a.activeTab == TabSessions {
-			return a, a.tryAutoLoadSelected()
-		}
-		return a, nil
+		return a, a.onTabSwitch()
 
 	case "]":
 		a.activeTab = (a.activeTab + 2) % 3
 		a.setFocus(FocusSessionList)
-		if a.activeTab == TabSessions {
-			return a, a.tryAutoLoadSelected()
-		}
-		return a, nil
+		return a, a.onTabSwitch()
 
 	case KeyIdeas:
 		a.activeTab = TabIdeas
 		a.setFocus(FocusSessionList)
-		return a, nil
+		return a, a.onTabSwitch()
 
 	case "T":
 		a.activeTab = TabTags
@@ -727,6 +770,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// FocusConversation: fall through to pane delegation below
 
 	case "tab":
+		if a.activeTab == TabIdeas {
+			return a, a.toggleIdeaConvView()
+		}
 		a.cycleFocusForward()
 		return a, nil
 
@@ -764,6 +810,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if a.activeTab == TabIdeas && a.focus == FocusSessionList {
+		if key == "E" {
+			if idea := a.ideasView.SelectedIdea(); idea != nil {
+				return a, a.openIdeaInEditor(idea.ID, idea.Content)
+			}
+			return a, nil
+		}
 		if key == "enter" {
 			idea := a.ideasView.SelectedIdea()
 			if idea == nil {
@@ -790,30 +842,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.err = "Session not found"
 			return a, nil
 		}
-		// For all other keys in Ideas tab, delegate to ideasView
 		var cmd tea.Cmd
 		a.ideasView, cmd = a.ideasView.Update(msg)
-		if a.autoPreview && navKeys[key] {
-			if idea := a.ideasView.SelectedIdea(); idea != nil {
-				if idea.SourceSessionID == "" {
-					a.selectedSession = nil
-					a.metadata.ClearSession()
-					a.conversation.SetMessages(nil, "")
-				} else if a.selectedSession == nil || a.selectedSession.ID != idea.SourceSessionID {
-					for _, s := range a.sessions {
-						if s.ID == idea.SourceSessionID {
-							a.selectedSession = &s
-							a.metadata.ClearSession()
-							a.conversation.SetMessages(nil, "")
-							if a.opencodeDB != nil {
-								return a, tea.Batch(cmd, a.loadSession(s))
-							}
-							break
-						}
-					}
-				}
-			}
-		}
 		return a, cmd
 	}
 
@@ -927,6 +957,53 @@ func (a *App) setFocus(f FocusedPane) {
 	a.metadata.SetFocused(f == FocusMetadata)
 }
 
+func (a *App) onTabSwitch() tea.Cmd {
+	if a.activeTab == TabIdeas {
+		a.ideaShowConv = false
+		if idea := a.ideasView.SelectedIdea(); idea != nil {
+			a.conversation.SetIdeaContent(idea.Content)
+			sessionTitle := ""
+			for _, s := range a.sessions {
+				if s.ID == idea.SourceSessionID {
+					sessionTitle = s.Title
+					break
+				}
+			}
+			a.metadata.SetIdeaMeta(*idea, sessionTitle)
+			return nil
+		}
+		a.conversation.ClearIdeaContent()
+		a.metadata.ClearIdea()
+		return nil
+	}
+	a.ideaShowConv = false
+	a.conversation.ClearIdeaContent()
+	a.metadata.ClearIdea()
+	return a.tryAutoLoadSelected()
+}
+
+func (a *App) toggleIdeaConvView() tea.Cmd {
+	idea := a.ideasView.SelectedIdea()
+	if idea == nil || idea.SourceSessionID == "" {
+		return nil
+	}
+	a.ideaShowConv = !a.ideaShowConv
+	if a.ideaShowConv {
+		for _, s := range a.sessions {
+			if s.ID == idea.SourceSessionID {
+				if a.opencodeDB != nil {
+					a.conversation.ClearIdeaContent()
+					return a.loadSession(s)
+				}
+				return nil
+			}
+		}
+		return nil
+	}
+	a.conversation.SetIdeaContent(idea.Content)
+	return nil
+}
+
 // --- Layout ---
 
 func (a *App) recalcLayout() tea.Cmd {
@@ -935,20 +1012,19 @@ func (a *App) recalcLayout() tea.Cmd {
 		h = 0
 	}
 	var cmds []tea.Cmd
-	var leftPaneW int
 
 	listRatio := a.listRatio
 	metaRatio := a.metaRatio
 
+	var listW int
 	switch {
 	case a.width >= 120:
-		listW := int(float64(a.width) * listRatio)
+		listW = int(float64(a.width) * listRatio)
 		metaW := int(float64(a.width) * metaRatio)
 		convW := a.width - listW - metaW
 		if convW < 10 {
 			convW = 10
 		}
-		leftPaneW = listW
 		a.sessionList.SetSize(listW, h-1)
 		if cmd := a.conversation.SetSize(convW, h); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -956,9 +1032,8 @@ func (a *App) recalcLayout() tea.Cmd {
 		a.metadata.SetSize(metaW, h)
 
 	case a.width >= 80:
-		listW := int(float64(a.width) * listRatio)
+		listW = int(float64(a.width) * listRatio)
 		convW := a.width - listW
-		leftPaneW = listW
 		a.sessionList.SetSize(listW, h-1)
 		if cmd := a.conversation.SetSize(convW, h); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -966,7 +1041,7 @@ func (a *App) recalcLayout() tea.Cmd {
 		a.metadata.SetSize(0, h)
 
 	default:
-		leftPaneW = a.width
+		listW = a.width
 		a.sessionList.SetSize(a.width, h-1)
 		if cmd := a.conversation.SetSize(a.width, h); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -974,14 +1049,12 @@ func (a *App) recalcLayout() tea.Cmd {
 		a.metadata.SetSize(a.width, h)
 	}
 
-	if cmd := a.ideasView.SetSize(leftPaneW, h-1); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	a.ideasView.SetSize(listW, h-1)
 
 	a.inputMode.width = a.width
 	a.inputMode.height = a.height
 	a.exportOverlay.SetSize(a.width, a.height)
-	a.tagsView.SetSize(leftPaneW, h-1)
+	a.tagsView.SetSize(listW, h-1)
 	return tea.Batch(cmds...)
 }
 
@@ -1324,6 +1397,46 @@ func (a App) doExport(sess model.Session, messages []model.Message, tags []strin
 	}
 }
 
+type editorDoneMsg struct {
+	ideaID  string
+	content string
+	err     error
+}
+
+func (a App) openIdeaInEditor(ideaID, content string) tea.Cmd {
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+
+	f, err := os.CreateTemp("", "mimir-idea-*.md")
+	if err != nil {
+		return func() tea.Msg { return editorDoneMsg{ideaID: ideaID, err: err} }
+	}
+	tmpPath := f.Name()
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return func() tea.Msg { return editorDoneMsg{ideaID: ideaID, err: err} }
+	}
+	f.Close()
+
+	c := exec.Command(editor, tmpPath)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		defer os.Remove(tmpPath)
+		if err != nil {
+			return editorDoneMsg{ideaID: ideaID, err: err}
+		}
+		raw, readErr := os.ReadFile(tmpPath)
+		if readErr != nil {
+			return editorDoneMsg{ideaID: ideaID, err: readErr}
+		}
+		return editorDoneMsg{ideaID: ideaID, content: strings.TrimRight(string(raw), "\n")}
+	})
+}
+
 // --- Additional async message types for metadata refresh ---
 
 type sessionMetaRefreshedMsg struct {
@@ -1429,7 +1542,11 @@ func (a App) buildStatusBar() string {
 	case FocusSessionList:
 		switch a.activeTab {
 		case TabIdeas:
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] jump to session  [/] search  [Esc] clear  [[]]] switch tab")
+			ideaHint := "[Tab] show session"
+			if a.ideaShowConv {
+				ideaHint = "[Tab] show idea"
+			}
+			parts = append(parts, "[↑↓/jk] navigate  [e] edit  [E] $EDITOR  [d] delete  [Enter] jump  [/] search  "+ideaHint+"  [[]]] switch tab")
 		case TabTags:
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] view sessions  [d] delete  [r] rename  [/] search  [Esc] clear")
 		default:

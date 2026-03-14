@@ -6,42 +6,27 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
 	"github.com/local/oc-manager/internal/tui/panes"
 )
 
-// Messages
 type ExitIdeasMsg struct{}
 type EditIdeaMsg struct{ ID string }
 type DeleteIdeaConfirmedMsg struct{ ID string }
-
-// ideaRendererReadyMsg is emitted when the glamour renderer is ready (async).
-type ideaRendererReadyMsg struct {
-	renderer      *glamour.TermRenderer
-	rendererWidth int
-}
-
-// IdeaSessionRequestMsg asks the app to load the linked session into the conversation pane.
 type IdeaSessionRequestMsg struct{ SessionID string }
+type IdeaSelectedMsg struct{ Idea model.Idea }
 
-// ideaPreviewRenderedMsg carries the glamour-rendered preview text.
-type ideaPreviewRenderedMsg struct{ content string }
 type IdeasView struct {
-	ideas         []model.Idea
-	searchFilter  string
-	list          list.Model
-	preview       viewport.Model
-	width         int
-	height        int
-	confirmDel    bool
-	deleteTarget  string
-	renderer      *glamour.TermRenderer
-	rendererWidth int
-	theme         panes.Theme
+	ideas        []model.Idea
+	searchFilter string
+	list         list.Model
+	width        int
+	height       int
+	confirmDel   bool
+	deleteTarget string
+	theme        panes.Theme
 }
 
 type IdeaItem struct {
@@ -50,9 +35,12 @@ type IdeaItem struct {
 
 func (i IdeaItem) Title() string {
 	content := i.Idea.Content
-	// Simple truncation for title if too long, though list handles this well usually
-	if len(content) > 50 {
-		return content[:50] + "..."
+	if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+		content = content[:idx]
+	}
+	if len([]rune(content)) > 50 {
+		runes := []rune(content)
+		return string(runes[:50]) + "..."
 	}
 	return content
 }
@@ -60,28 +48,12 @@ func (i IdeaItem) Title() string {
 func (i IdeaItem) Description() string {
 	ts := time.UnixMilli(i.Idea.TimeCreated).Format("Jan 02, 2006 15:04")
 	if i.Idea.SourceSessionID != "" {
-		return fmt.Sprintf("%s • Session: %s", ts, i.Idea.SourceSessionID)
+		return fmt.Sprintf("%s • linked to session", ts)
 	}
 	return ts
 }
 
 func (i IdeaItem) FilterValue() string { return i.Idea.Content }
-
-func newRendererCmd(width int, theme panes.Theme) tea.Cmd {
-	return func() tea.Msg {
-		r, err := glamour.NewTermRenderer(
-			theme.GlamourOption(),
-			glamour.WithWordWrap(width),
-		)
-		if err != nil {
-			r, _ = glamour.NewTermRenderer(
-				glamour.WithStylePath("dark"),
-				glamour.WithWordWrap(width),
-			)
-		}
-		return ideaRendererReadyMsg{renderer: r, rendererWidth: width}
-	}
-}
 
 func NewIdeasView(width, height int, theme panes.Theme) IdeasView {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
@@ -94,14 +66,11 @@ func NewIdeasView(width, height int, theme panes.Theme) IdeasView {
 		Foreground(theme.AccentFg).
 		Padding(0, 1)
 
-	vp := viewport.New(0, 0)
-
 	v := IdeasView{
-		list:    l,
-		preview: vp,
-		width:   width,
-		height:  height,
-		theme:   theme,
+		list:   l,
+		width:  width,
+		height: height,
+		theme:  theme,
 	}
 	v.SetSize(width, height)
 	return v
@@ -110,7 +79,7 @@ func NewIdeasView(width, height int, theme panes.Theme) IdeasView {
 func (v *IdeasView) SetIdeas(ideas []model.Idea) tea.Cmd {
 	v.ideas = ideas
 	v.applyFilter()
-	return v.renderPreviewCmd()
+	return v.selectionChangedCmd()
 }
 
 func (v *IdeasView) SetFilter(q string) {
@@ -133,28 +102,12 @@ func (v *IdeasView) applyFilter() {
 	}
 }
 
-func (v *IdeasView) SetSize(width, height int) tea.Cmd {
+func (v *IdeasView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
-
-	listWidth := int(float64(width) * 0.4)
-	if listWidth < 20 {
-		listWidth = 20
-	}
-	previewWidth := width - listWidth - 4 // Account for borders/padding
-
-	v.list.SetSize(listWidth, height-2)
-	v.preview.Width = previewWidth
-	v.preview.Height = height - 2
-
-	// Only recreate renderer when preview width changes — do it asynchronously.
-	if previewWidth > 0 && previewWidth != v.rendererWidth {
-		return newRendererCmd(previewWidth, v.theme)
-	}
-	return v.renderPreviewCmd()
+	v.list.SetSize(width, height-2)
 }
 
-// SelectedIdea returns the currently highlighted idea, or nil if none.
 func (v *IdeasView) SelectedIdea() *model.Idea {
 	sel, ok := v.list.SelectedItem().(IdeaItem)
 	if !ok {
@@ -162,6 +115,15 @@ func (v *IdeasView) SelectedIdea() *model.Idea {
 	}
 	idea := sel.Idea
 	return &idea
+}
+
+func (v *IdeasView) selectionChangedCmd() tea.Cmd {
+	idea := v.SelectedIdea()
+	if idea == nil {
+		return nil
+	}
+	selected := *idea
+	return func() tea.Msg { return IdeaSelectedMsg{Idea: selected} }
 }
 
 func (v IdeasView) Init() tea.Cmd {
@@ -173,20 +135,7 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		cmds = append(cmds, v.SetSize(msg.Width, msg.Height))
-
-	case ideaRendererReadyMsg:
-		v.renderer = msg.renderer
-		v.rendererWidth = msg.rendererWidth
-		return v, v.renderPreviewCmd()
-
-	case ideaPreviewRenderedMsg:
-		v.preview.SetContent(msg.content)
-		return v, nil
-
 	case tea.KeyMsg:
-		// Handle Delete Confirmation
 		if v.confirmDel {
 			switch msg.String() {
 			case "y", "Y":
@@ -201,14 +150,12 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 				v.deleteTarget = ""
 				return v, nil
 			default:
-				return v, nil // Ignore other keys while confirming
+				return v, nil
 			}
 		}
 
-		// Normal Navigation
 		switch msg.String() {
 		case "esc", "q":
-			// Ideas is now a tab — no-op here; use [ to switch to Sessions tab
 		case "e":
 			if v.list.FilterState() != list.Filtering {
 				if sel, ok := v.list.SelectedItem().(IdeaItem); ok {
@@ -226,54 +173,15 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 		}
 	}
 
-	// Update List
 	prevSel := v.list.Index()
 	v.list, cmd = v.list.Update(msg)
 	cmds = append(cmds, cmd)
 
 	if v.list.Index() != prevSel {
-		cmds = append(cmds, v.renderPreviewCmd())
-		// Feature 5: auto-load linked session in conversation pane on navigation.
-		if sel, ok := v.list.SelectedItem().(IdeaItem); ok && sel.Idea.SourceSessionID != "" {
-			sid := sel.Idea.SourceSessionID
-			cmds = append(cmds, func() tea.Msg { return IdeaSessionRequestMsg{SessionID: sid} })
-		}
+		cmds = append(cmds, v.selectionChangedCmd())
 	}
-
-	// Update Preview (viewport)
-	v.preview, cmd = v.preview.Update(msg)
-	cmds = append(cmds, cmd)
 
 	return v, tea.Batch(cmds...)
-}
-
-// renderPreviewCmd returns a tea.Cmd that renders the selected idea's preview
-// in a background goroutine (avoids blocking the UI thread with glamour).
-func (v *IdeasView) renderPreviewCmd() tea.Cmd {
-	if len(v.ideas) == 0 {
-		v.preview.SetContent("")
-		return nil
-	}
-
-	sel := v.list.SelectedItem()
-	if sel == nil {
-		v.preview.SetContent("")
-		return nil
-	}
-
-	content := sel.(IdeaItem).Idea.Content
-	renderer := v.renderer // capture for goroutine
-
-	return func() tea.Msg {
-		if renderer == nil {
-			return ideaPreviewRenderedMsg{content: content}
-		}
-		rendered, err := renderer.Render(content)
-		if err != nil {
-			rendered = content
-		}
-		return ideaPreviewRenderedMsg{content: rendered}
-	}
 }
 
 func (v IdeasView) View() string {
@@ -281,34 +189,22 @@ func (v IdeasView) View() string {
 		return v.viewEmpty()
 	}
 
-	listView := v.list.View()
-
-	// Style the list view container
 	listStyle := lipgloss.NewStyle().
-		Width(v.list.Width()).
+		Width(v.width).
 		Height(v.height).
-		Border(lipgloss.RoundedBorder(), false, true, false, false).
 		BorderForeground(v.theme.BorderFocused)
 
-	previewStyle := lipgloss.NewStyle().
-		Width(v.width-v.list.Width()-2). // -2 for border
-		Height(v.height).
-		Padding(1, 2)
-
-	renderedList := listStyle.Render(listView)
-	renderedPreview := previewStyle.Render(v.preview.View())
-
-	mainView := lipgloss.JoinHorizontal(lipgloss.Top, renderedList, renderedPreview)
+	rendered := listStyle.Render(v.list.View())
 
 	if v.confirmDel {
-		return v.overlayConfirmation(mainView)
+		return v.overlayConfirmation(rendered)
 	}
 
-	return mainView
+	return rendered
 }
 
 func (v IdeasView) viewEmpty() string {
-	msg := "No ideas yet.\n\nPress i on any session to capture an idea.\n\n[q/Esc] Back to sessions"
+	msg := "No ideas yet.\n\nPress i on any session to capture an idea."
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -326,32 +222,17 @@ func (v IdeasView) viewEmpty() string {
 }
 
 func (v IdeasView) overlayConfirmation(background string) string {
-	// Simple overlay: centered box on top of content?
-	// Lipgloss doesn't do "layers" easily on top of existing string without potentially messing up ANSI.
-	// Best approach for TUI modal:
-	// Use lipgloss.Place to center the modal, and if possible, place it *over* the background.
-	// But placing over a string background is hard.
-	// Alternative: Just return the modal centered on a blank/dimmed background, ignoring the underlying view for now
-	// OR (better): Since we have the background string, we can try to center the modal in a new layer.
-	// But let's stick to the simplest reliable method:
-	// Render the background, then just append the modal? No.
-	// Let's just return the modal centered. It's a "modal mode".
-	// The user knows context.
-
 	modalText := fmt.Sprintf("Delete idea?\n\n\"%s\"\n\n[y/N]", v.truncatedDeleteTarget())
 
 	modal := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("196")). // Red
+		BorderForeground(lipgloss.Color("196")).
 		Padding(1, 2).
 		Align(lipgloss.Center).
 		Width(40).
 		Render(modalText)
 
-	// To make it look like an overlay, we'd need to manipulate the background string.
-	// For now, let's just return the modal centered, assuming it takes focus.
-	// If we want to keep context, we can try to just print it.
-
+	_ = background
 	return lipgloss.Place(
 		v.width, v.height,
 		lipgloss.Center, lipgloss.Center,
@@ -360,11 +241,11 @@ func (v IdeasView) overlayConfirmation(background string) string {
 }
 
 func (v IdeasView) truncatedDeleteTarget() string {
-	// Find the idea content
 	for _, idea := range v.ideas {
 		if idea.ID == v.deleteTarget {
-			if len(idea.Content) > 30 {
-				return idea.Content[:27] + "..."
+			runes := []rune(idea.Content)
+			if len(runes) > 30 {
+				return string(runes[:27]) + "..."
 			}
 			return idea.Content
 		}

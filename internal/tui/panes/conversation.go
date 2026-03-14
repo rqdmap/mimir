@@ -191,17 +191,22 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 			return c, nil
 		}
 		if c.convSearchMode {
+			if msg.Paste {
+				c.convSearchQuery += string(msg.Runes)
+				c.updateConvSearchHighlights()
+				return c, nil
+			}
 			switch msg.String() {
 			case "esc", "enter":
 				c.convSearchMode = false
 			case "backspace":
-				if len(c.convSearchQuery) > 0 {
-					c.convSearchQuery = c.convSearchQuery[:len(c.convSearchQuery)-1]
+				if runes := []rune(c.convSearchQuery); len(runes) > 0 {
+					c.convSearchQuery = string(runes[:len(runes)-1])
 					c.updateConvSearchHighlights()
 				}
 			default:
-				if k := msg.String(); len(k) == 1 {
-					c.convSearchQuery += k
+				if msg.Type == tea.KeyRunes {
+					c.convSearchQuery += string(msg.Runes)
 					c.updateConvSearchHighlights()
 				}
 			}
@@ -256,10 +261,14 @@ func (c ConversationPane) View() string {
 		borderColor = c.theme.BorderFocused
 	}
 
+	titleText := "Conversation"
+	if c.ideaMode {
+		titleText = "Idea"
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(borderColor).
-		Render("Conversation")
+		Render(titleText)
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
