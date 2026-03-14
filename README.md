@@ -1,38 +1,29 @@
 # mimir
 
-> In Norse mythology, Mímir is the guardian of the well of wisdom — keeper of all memory and knowledge.
+> In Norse mythology, Mimir is the guardian of the well of wisdom — keeper of all memory and knowledge.
 
 A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat)
 
+![mimir](assets/main.jpg)
+
 ## Features
 
-- **Session browser** — browse all your OpenCode sessions with live search and tag filtering
-- **Conversation viewer** — read full AI conversations with rendered markdown
-- **Metadata pane** — view session details, attached tags, and related ideas
-- **Ideas tab** — manage your ideas linked to sessions
-- **Batch loading** — sessions load progressively in the background (no startup freeze)
-- **Progress bar** — real `X/N` loading indicator in the status bar
-- **Sub-agent filtering** — toggle visibility of sub-agent sessions with `h`
-- **Markdown export** — export any session as a `.md` file with selectable content (messages, metadata, tool calls, reasoning)
-
-## Screenshot
-
-```
-┌─ Sessions ──────────────────────┐┌─ Conversation ───────────────────┐
-│ > implement dark mode toggle    ││ You: add a dark mode toggle       │
-│   fix auth middleware           ││                                   │
-│   refactor pricing logic        ││ Claude: I'll help add a dark mode │
-│   add batch loading progress    ││ toggle to your application...     │
-│   ...                           ││                                   │
-├─────────────────────────────────┤├─ Metadata ────────────────────────┤
-│ Loading 42/138 [████░░░░░░░░]   ││ ID:  abc1234                      │
-└─────────────────────────────────┘│ Dir: ~/projects/myapp             │
-                                   │ Tags: frontend, ui                │
-                                   └───────────────────────────────────┘
-```
+- **Three-tab interface** — Sessions, Ideas, and Tags tabs with `[` / `]` cycling
+- **Session browser** — browse all OpenCode sessions with live search, tag filtering, and sub-agent toggle
+- **Conversation viewer** — read full AI conversations with glamour-rendered markdown, tool call & subtask display, and vim-style `/` search with `n`/`N` navigation
+- **Metadata pane** — view session tags, linked ideas, and message stats at a glance
+- **Idea notebook** — capture ideas linked to sessions; idea body rendered in the conversation pane, `Tab` toggles between idea content and linked session conversation; `E` opens idea in `$EDITOR`
+- **Tag management** — create, rename, delete tags; filter sessions by tag; manage tag-session associations
+- **Markdown export** — export any session as `.md` with selectable content (messages, metadata, tool calls, reasoning)
+- **Responsive layout** — automatically adapts between 3-pane (>=120 cols), 2-pane (>=80), and single-pane views
+- **Progressive loading** — sessions load in background batches of 100 with a live `X/N` progress indicator
+- **Theming** — built-in Gruvbox (default) and classic themes, configurable via `config.json` or `MIMIR_THEME`
+- **Cross-pane scrolling** — scroll conversation preview from the session list (`Ctrl+D`/`Ctrl+U`), plus mouse wheel support
+- **Auto-preview mode** — optionally auto-load conversations on navigation (lazygit-style)
+- **Unicode & paste support** — proper CJK character handling and bracketed paste in search
 
 ## Installation
 
@@ -44,7 +35,7 @@ go build -o ocm ./cmd/ocm/
 mv ocm ~/.local/bin/
 ```
 
-**Requirements:** Go 1.21+, [OpenCode](https://opencode.ai) installed and used at least once.
+**Requirements:** Go 1.25+, [OpenCode](https://opencode.ai) installed and used at least once.
 
 ## Usage
 
@@ -53,24 +44,96 @@ ocm                    # Launch TUI
 ocm --list-sessions    # Print all sessions to stdout and exit
 ```
 
+## Configuration
+
+Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/mimir/config.json`):
+
+```json
+{
+  "auto_preview": false,
+  "theme": "gruvbox",
+  "export_dir": "~/exports",
+  "layout": {
+    "list_ratio": 0.27,
+    "meta_ratio": 0.16
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `auto_preview` | `false` | Auto-load conversation when navigating sessions (lazygit-style) |
+| `theme` | `"gruvbox"` | Color theme — `"gruvbox"` or `"default"` |
+| `export_dir` | `""` (cwd) | Directory for exported markdown files |
+| `layout.list_ratio` | `0.27` | Left pane width as fraction of terminal width |
+| `layout.meta_ratio` | `0.16` | Right metadata pane width as fraction |
+
+The theme can also be overridden with the `MIMIR_THEME` environment variable.
+
 ## Keybindings
+
+### Global
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Navigate sessions / scroll conversation |
-| `Tab` | Switch focus between panes |
-| `[` / `]` | Switch left-pane tabs (Sessions ↔ Ideas) |
-| `/` | Search sessions |
-| `t` | Filter by tag |
-| `h` | Toggle sub-agent session visibility |
-| `r` | Refresh sessions |
+| `Tab` / `Shift+Tab` | Cycle focus between panes |
+| `[` / `]` | Cycle left-pane tabs (Ideas / Sessions / Tags) |
+| `I` | Jump to Ideas tab |
+| `T` | Jump to Tags tab |
+| `A` | Toggle sub-agent session visibility |
+| `/` | Search within current tab or conversation |
+| `r` | Refresh current tab |
+| `i` | Capture a new idea (linked to selected session if on Sessions tab) |
+| `Ctrl+E` | Export selected session as Markdown |
 | `?` | Show help overlay |
-| `q` / `Esc` | Quit / close overlay |
-| `Ctrl+E` | Export session as Markdown |
+| `q` / `Ctrl+C` | Quit |
+| `Esc` | Clear search / close overlay / return focus to list |
+
+### Session List
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Navigate sessions |
+| `Enter` | Open session (focus shifts to conversation) |
+| `Ctrl+D` / `Ctrl+U` | Scroll conversation preview without leaving list |
+| `t` | Add/remove tags on selected session |
+
+### Conversation
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Scroll line by line |
+| `Ctrl+D` / `Ctrl+U` | Page down / up |
+| `g` / `G` | Jump to top / bottom |
+| `/` | Search conversation text |
+| `n` / `N` | Next / previous search match |
+| `Esc` / `Enter` | Exit search mode |
+
+### Ideas Tab
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Navigate ideas |
+| `Tab` | Toggle between idea body and linked session conversation |
+| `Enter` | Jump to linked session (switches to Sessions tab) |
+| `e` | Edit idea inline |
+| `E` | Open idea in `$VISUAL` / `$EDITOR` |
+| `d` | Delete idea (with confirmation) |
+
+### Tags Tab
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Navigate tags |
+| `Enter` | View sessions with this tag |
+| `d` | Delete tag (with confirmation) |
+| `r` | Rename tag |
 
 ## How It Works
 
-`mimir` opens OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) **read-only** and its own manager database for tags and ideas. Sessions are loaded in batches of 100 in the background so the UI stays responsive from the first keypress.
+Mimir reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) in **read-only** mode — it never writes to OpenCode's data.
+
+It also maintains its own manager database alongside it for user-created metadata: tags, ideas, and session associations. Sessions are loaded progressively in batches of 100 so the UI stays responsive from the first keypress.
 
 ## License
 
