@@ -57,8 +57,8 @@ func main() {
 
 	app := tui.NewApp(opencodeDB, managerDB, theme, tui.Options{
 		AutoPreview: cfg.AutoPreview,
-		ListRatio:   cfg.Layout.ListRatio,
-		MetaRatio:   cfg.Layout.MetaRatio,
+		Ratio:       config.NormalizeRatio(cfg.Layout.Ratio),
+		TabOrder:    config.NormalizeTabOrder(cfg.Layout.TabOrder),
 		ExportDir:   cfg.ExportDir,
 	})
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())

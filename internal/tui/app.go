@@ -78,8 +78,8 @@ type sessionsBatchLoadedMsg struct {
 
 type Options struct {
 	AutoPreview bool
-	ListRatio   float64
-	MetaRatio   float64
+	Ratio       [3]int
+	TabOrder    []string
 	ExportDir   string
 }
 
@@ -125,16 +125,47 @@ type App struct {
 	theme     panes.Theme
 
 	autoPreview  bool
-	listRatio    float64
-	metaRatio    float64
+	ratio        [3]int
+	tabOrder     []string
 	ideaShowConv bool
+}
+
+func tabNameToAppTab(name string) AppTab {
+	switch name {
+	case "sessions":
+		return TabSessions
+	case "tags":
+		return TabTags
+	default:
+		return TabIdeas
+	}
+}
+
+func (a App) nextTab(delta int) AppTab {
+	n := len(a.tabOrder)
+	if n == 0 {
+		return a.activeTab
+	}
+	cur := 0
+	for i, name := range a.tabOrder {
+		if tabNameToAppTab(name) == a.activeTab {
+			cur = i
+			break
+		}
+	}
+	next := ((cur+delta)%n + n) % n
+	return tabNameToAppTab(a.tabOrder[next])
 }
 
 // NewApp creates an App with both databases wired in.
 func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App {
+	defaultTab := TabIdeas
+	if len(opts.TabOrder) > 0 {
+		defaultTab = tabNameToAppTab(opts.TabOrder[0])
+	}
 	a := App{
 		focus:         FocusSessionList,
-		activeTab:     TabIdeas,
+		activeTab:     defaultTab,
 		sessionTags:   make(map[string][]string),
 		opencodeDB:    opencodeDB,
 		managerDB:     managerDB,
@@ -142,8 +173,8 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 		hideSubAgents: true,
 		theme:         theme,
 		autoPreview:   opts.AutoPreview,
-		listRatio:     opts.ListRatio,
-		metaRatio:     opts.MetaRatio,
+		ratio:         opts.Ratio,
+		tabOrder:      opts.TabOrder,
 		exportDir:     opts.ExportDir,
 	}
 
@@ -738,12 +769,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "[":
-		a.activeTab = (a.activeTab + 1) % 3
+		a.activeTab = a.nextTab(-1)
 		a.setFocus(FocusSessionList)
 		return a, a.onTabSwitch()
 
 	case "]":
-		a.activeTab = (a.activeTab + 2) % 3
+		a.activeTab = a.nextTab(1)
 		a.setFocus(FocusSessionList)
 		return a, a.onTabSwitch()
 
@@ -1013,14 +1044,15 @@ func (a *App) recalcLayout() tea.Cmd {
 	}
 	var cmds []tea.Cmd
 
-	listRatio := a.listRatio
-	metaRatio := a.metaRatio
+	r := a.ratio
+	total3 := r[0] + r[1] + r[2]
+	total2 := r[0] + r[1]
 
 	var listW int
 	switch {
 	case a.width >= 120:
-		listW = int(float64(a.width) * listRatio)
-		metaW := int(float64(a.width) * metaRatio)
+		listW = r[0] * a.width / total3
+		metaW := r[2] * a.width / total3
 		convW := a.width - listW - metaW
 		if convW < 10 {
 			convW = 10
@@ -1032,7 +1064,7 @@ func (a *App) recalcLayout() tea.Cmd {
 		a.metadata.SetSize(metaW, h)
 
 	case a.width >= 80:
-		listW = int(float64(a.width) * listRatio)
+		listW = r[0] * a.width / total2
 		convW := a.width - listW
 		a.sessionList.SetSize(listW, h-1)
 		if cmd := a.conversation.SetSize(convW, h); cmd != nil {
@@ -1445,22 +1477,25 @@ type sessionMetaRefreshedMsg struct {
 
 // --- View helpers ---
 
-// renderTabHeader returns a 1-line tab header for the left pane.
 func (a App) renderTabHeader(active AppTab) string {
 	inactive := lipgloss.NewStyle().Foreground(a.theme.TextMuted).Padding(0, 1)
 	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(a.theme.TextNormal).Padding(0, 1)
-	sess := inactive.Render("Sessions")
-	ideas := inactive.Render("Ideas")
-	tags := inactive.Render("Tags")
-	switch active {
-	case TabSessions:
-		sess = activeStyle.Render("Sessions")
-	case TabIdeas:
-		ideas = activeStyle.Render("Ideas")
-	case TabTags:
-		tags = activeStyle.Render("Tags")
+	tabLabel := map[AppTab]string{
+		TabSessions: "Sessions",
+		TabIdeas:    "Ideas",
+		TabTags:     "Tags",
 	}
-	return ideas + "  " + sess + "  " + tags
+	var parts []string
+	for _, name := range a.tabOrder {
+		tab := tabNameToAppTab(name)
+		label := tabLabel[tab]
+		if tab == active {
+			parts = append(parts, activeStyle.Render(label))
+		} else {
+			parts = append(parts, inactive.Render(label))
+		}
+	}
+	return strings.Join(parts, "  ")
 }
 
 func (a App) buildStatusBar() string {
