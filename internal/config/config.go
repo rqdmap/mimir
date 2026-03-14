@@ -6,9 +6,18 @@ import (
 	"path/filepath"
 )
 
+var validTabNames = map[string]bool{
+	"sessions": true,
+	"ideas":    true,
+	"tags":     true,
+}
+
+var DefaultTabOrder = []string{"ideas", "sessions", "tags"}
+var DefaultRatio = []int{2, 5, 2}
+
 type LayoutConfig struct {
-	ListRatio float64 `json:"list_ratio"`
-	MetaRatio float64 `json:"meta_ratio"`
+	Ratio    []int    `json:"ratio"`
+	TabOrder []string `json:"tab_order"`
 }
 
 type Config struct {
@@ -24,10 +33,45 @@ func defaultConfig() Config {
 		Theme:       "",
 		ExportDir:   "",
 		Layout: LayoutConfig{
-			ListRatio: 0.27,
-			MetaRatio: 0.16,
+			Ratio:    append([]int{}, DefaultRatio...),
+			TabOrder: append([]string{}, DefaultTabOrder...),
 		},
 	}
+}
+
+func NormalizeRatio(r []int) [3]int {
+	if len(r) != 3 {
+		return [3]int{DefaultRatio[0], DefaultRatio[1], DefaultRatio[2]}
+	}
+	sum := 0
+	for _, v := range r {
+		if v < 0 {
+			return [3]int{DefaultRatio[0], DefaultRatio[1], DefaultRatio[2]}
+		}
+		sum += v
+	}
+	if sum == 0 {
+		return [3]int{DefaultRatio[0], DefaultRatio[1], DefaultRatio[2]}
+	}
+	return [3]int{r[0], r[1], r[2]}
+}
+
+func NormalizeTabOrder(order []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, name := range order {
+		if validTabNames[name] && !seen[name] {
+			result = append(result, name)
+			seen[name] = true
+		}
+	}
+	for _, name := range DefaultTabOrder {
+		if !seen[name] {
+			result = append(result, name)
+			seen[name] = true
+		}
+	}
+	return result
 }
 
 func configPath() string {
@@ -46,6 +90,12 @@ func Load() Config {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg
+	}
+	if len(cfg.Layout.Ratio) == 0 {
+		cfg.Layout.Ratio = append([]int{}, DefaultRatio...)
+	}
+	if len(cfg.Layout.TabOrder) == 0 {
+		cfg.Layout.TabOrder = append([]string{}, DefaultTabOrder...)
 	}
 	return cfg
 }
