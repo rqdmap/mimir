@@ -7,7 +7,9 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat)
 
-![mimir](assets/main.jpg)
+<p align="center">
+  <img src="assets/main.png" alt="mimir" width="800">
+</p>
 
 ## Features
 
