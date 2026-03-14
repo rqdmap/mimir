@@ -101,11 +101,11 @@ type App struct {
 	height int
 	err    string
 
-	inputMode    InputMode
-	tagsView     TagsView
+	inputMode     InputMode
+	tagsView      TagsView
 	exportOverlay ExportOverlay
-	exportDir    string
-	exportFlash  string // temporary success/error message shown in status bar
+	exportDir     string
+	exportFlash   string // temporary success/error message shown in status bar
 
 	searchMode  bool
 	searchQuery string
@@ -821,7 +821,16 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		wasManageMode := a.tagsView.manageMode
 		a.tagsView, cmd = a.tagsView.Update(msg)
-		if wasManageMode {
+		if !wasManageMode && a.tagsView.manageMode {
+			if sel := a.tagsView.SelectedManageSession(); sel != nil {
+				a.selectedSession = sel
+				a.metadata.ClearSession()
+				a.conversation.SetMessages(nil, "")
+				if a.opencodeDB != nil {
+					return a, tea.Batch(cmd, a.loadSession(*sel))
+				}
+			}
+		} else if wasManageMode {
 			if key == "enter" {
 				if sel := a.tagsView.SelectedManageSession(); sel != nil {
 					a.selectedSession = sel
@@ -1294,6 +1303,7 @@ func (a *App) tryAutoLoadSelected() tea.Cmd {
 	}
 	return nil
 }
+
 // doExport writes the session as a Markdown file asynchronously.
 func (a App) doExport(sess model.Session, messages []model.Message, tags []string, opts export.Options, dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -1313,7 +1323,6 @@ func (a App) doExport(sess model.Session, messages []model.Message, tags []strin
 		return ExportDoneMsg{Path: path}
 	}
 }
-
 
 // --- Additional async message types for metadata refresh ---
 
@@ -1446,7 +1455,7 @@ func (a App) buildStatusBar() string {
 		if strings.HasPrefix(a.exportFlash, "✗") {
 			flashStyle = errStyle
 		}
-		return bar + flashStyle.Render("  " + a.exportFlash)
+		return bar + flashStyle.Render("  "+a.exportFlash)
 	}
 
 	if a.err != "" {
