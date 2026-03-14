@@ -161,6 +161,7 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		    CASE JSON_EXTRACT(p.data, '$.type')
 		        WHEN 'text'      THEN JSON_EXTRACT(p.data, '$.text')
 		        WHEN 'reasoning' THEN JSON_EXTRACT(p.data, '$.text')
+		        WHEN 'subtask'   THEN JSON_EXTRACT(p.data, '$.description')
 		        ELSE NULL
 		    END AS text_content,
 		    CASE JSON_EXTRACT(p.data, '$.type')
@@ -172,6 +173,7 @@ func LoadSessionMessages(db *sql.DB, sessionID string) ([]model.Message, error) 
 		                'output', SUBSTR(COALESCE(JSON_EXTRACT(p.data, '$.state.output'), ''), 1, 4000)
 		            )
 		        )
+		        WHEN 'subtask' THEN JSON_EXTRACT(p.data, '$.agent')
 		        ELSE NULL
 		    END AS tool_data,
 		    CASE JSON_EXTRACT(p.data, '$.type')
@@ -252,6 +254,8 @@ func parsePartFromFields(id string, partType, textContent, toolData, filename, m
 			_ = json.Unmarshal([]byte(patchFiles.String), &files)
 		}
 		return &model.Part{Type: model.PartTypePatch, Text: strings.Join(files, ", ")}
+	case "subtask":
+		return &model.Part{Type: model.PartTypeSubtask, Text: textContent.String, ToolName: toolData.String}
 	default:
 		log.Printf("skipping unknown part type: %s", partType.String)
 		return nil
@@ -357,6 +361,21 @@ func parsePart(partID, dataJSON string) *model.Part {
 			Type:     model.PartTypeFile,
 			Filename: p.Filename,
 			MimeType: p.MimeType,
+		}
+
+	case "subtask":
+		var p struct {
+			Description string `json:"description"`
+			Agent       string `json:"agent"`
+		}
+		if err := json.Unmarshal([]byte(dataJSON), &p); err != nil {
+			log.Printf("skipping subtask part %s: bad JSON: %v", partID, err)
+			return nil
+		}
+		return &model.Part{
+			Type:     model.PartTypeSubtask,
+			Text:     p.Description,
+			ToolName: p.Agent,
 		}
 
 	default:

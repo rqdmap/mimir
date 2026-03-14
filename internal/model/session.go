@@ -42,6 +42,7 @@ const (
 	PartTypeReasoning PartType = "reasoning"
 	PartTypePatch     PartType = "patch"
 	PartTypeFile      PartType = "file"
+	PartTypeSubtask   PartType = "subtask"
 	PartTypeUnknown   PartType = "unknown"
 )
 
