@@ -21,8 +21,11 @@ func OpenOpencodeDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 	dbPath := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
-	// MUST use ?mode=ro to enforce read-only
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_cache_size=-65536&mmap_size=536870912", dbPath)
+	// MUST use ?mode=ro to enforce read-only.
+	// Do NOT set _journal_mode on a read-only connection — it would attempt
+	// a write and fail with SQLITE_READONLY. WAL mode is managed by opencode.
+	// _busy_timeout gives us a grace period when opencode holds a write lock.
+	dsn := fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000&_cache_size=-65536&mmap_size=536870912", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
