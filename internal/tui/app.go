@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -550,6 +551,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			a.flash = flashMsg{text: "Exported → " + msg.Path}
 		}
+		return a, tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+			return clearFlashMsg{}
+		})
+
+	case clearFlashMsg:
+		a.flash = flashMsg{}
 		return a, nil
 
 	}
@@ -645,7 +652,11 @@ func (a App) View() string {
 		mainView = a.overlayHelp(mainView)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar)
+	full := lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar)
+	if a.flash.text != "" {
+		full = a.overlayFlash(full)
+	}
+	return full
 }
 
 // --- Key handling ---
@@ -653,7 +664,15 @@ func (a App) View() string {
 func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Help overlay — eat all keys; ctrl+c still quits, everything else closes help
+	if a.flash.text != "" {
+		if key == "ctrl+c" {
+			return a, tea.Quit
+		}
+		a.flash = flashMsg{}
+		return a, nil
+	}
+
+	// Help overlay
 	if a.showHelp {
 		if key == "ctrl+c" {
 			return a, tea.Quit
@@ -1687,6 +1706,46 @@ func (a App) overlayHelp(background string) string {
 		Render(lipgloss.NewStyle().Foreground(a.theme.TextMuted).Render(helpText))
 
 	_ = background // background string not layered — just show centered help
+	return lipgloss.Place(
+		a.width, a.height,
+		lipgloss.Center, lipgloss.Center,
+		box,
+	)
+}
+
+func (a App) overlayFlash(background string) string {
+	borderColor := a.theme.BorderFocused
+	title := "✓ Export complete"
+	if a.flash.isError {
+		borderColor = a.theme.ErrorText
+		title = "✗ Export failed"
+	}
+
+	body := lipgloss.NewStyle().
+		Foreground(a.theme.TextNormal).
+		Width(60).
+		Render(a.flash.text)
+
+	hint := lipgloss.NewStyle().
+		Foreground(a.theme.TextMuted).
+		Render("[any key] dismiss")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Bold(true).Foreground(borderColor).Render(title),
+		"",
+		body,
+		"",
+		hint,
+	)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 3).
+		Width(68).
+		Render(content)
+
+	_ = background
 	return lipgloss.Place(
 		a.width, a.height,
 		lipgloss.Center, lipgloss.Center,
