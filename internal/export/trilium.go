@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer/html"
 )
 
 // TriliumConfig holds connection details for a Trilium Notes ETAPI endpoint.
@@ -16,12 +22,40 @@ type TriliumConfig struct {
 	ParentNoteID string
 }
 
+func markdownToHTML(md string) (string, error) {
+	gm := goldmark.New(
+		goldmark.WithExtensions(
+			extension.GFM,
+			extension.Table,
+			extension.Strikethrough,
+			extension.TaskList,
+		),
+		goldmark.WithParserOptions(
+			parser.WithAutoHeadingID(),
+		),
+		goldmark.WithRendererOptions(
+			html.WithHardWraps(),
+			html.WithXHTML(),
+			html.WithUnsafe(), // allow raw HTML in markdown (e.g. code blocks with special chars)
+		),
+	)
+	var buf bytes.Buffer
+	if err := gm.Convert([]byte(md), &buf); err != nil {
+		return "", fmt.Errorf("markdown→HTML conversion: %w", err)
+	}
+	return buf.String(), nil
+}
+
 // UploadSession upserts a note in Trilium: searches by title, updates content if
 // found, or creates a new note if not found.
 func UploadSession(cfg TriliumConfig, title, markdown string) error {
+	htmlContent, err := markdownToHTML(markdown)
+	if err != nil {
+		return err
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 
-	// Step 1: Search for an existing note by title.
 	query := fmt.Sprintf(`note.title = "%s"`, title)
 	encoded := url.QueryEscape(query)
 	searchURL := cfg.URL + "/etapi/notes?search=" + encoded
@@ -54,11 +88,10 @@ func UploadSession(cfg TriliumConfig, title, markdown string) error {
 	}
 
 	if len(searchResult.Results) > 0 {
-		// Step 2: Update existing note content.
 		noteID := searchResult.Results[0].NoteID
 		putURL := fmt.Sprintf("%s/etapi/notes/%s/content", cfg.URL, noteID)
 
-		req, err = http.NewRequest(http.MethodPut, putURL, bytes.NewBufferString(markdown))
+		req, err = http.NewRequest(http.MethodPut, putURL, bytes.NewBufferString(htmlContent))
 		if err != nil {
 			return fmt.Errorf("trilium ETAPI build PUT request: %w", err)
 		}
@@ -72,12 +105,12 @@ func UploadSession(cfg TriliumConfig, title, markdown string) error {
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("trilium ETAPI %s %s: %s", http.MethodPut, putURL, resp.Status)
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("trilium ETAPI %s %s: %s — %s", http.MethodPut, putURL, resp.Status, body)
 		}
 		return nil
 	}
 
-	// Step 3: Create a new note.
 	createURL := cfg.URL + "/etapi/create-note"
 
 	body := struct {
@@ -89,9 +122,9 @@ func UploadSession(cfg TriliumConfig, title, markdown string) error {
 	}{
 		ParentNoteID: cfg.ParentNoteID,
 		Title:        title,
-		Type:         "code",
-		MIME:         "text/markdown",
-		Content:      markdown,
+		Type:         "text",
+		MIME:         "text/html",
+		Content:      htmlContent,
 	}
 
 	bodyBytes, err := json.Marshal(body)
@@ -113,7 +146,8 @@ func UploadSession(cfg TriliumConfig, title, markdown string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("trilium ETAPI %s %s: %s", http.MethodPost, createURL, resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("trilium ETAPI %s %s: %s — %s", http.MethodPost, createURL, resp.Status, body)
 	}
 	return nil
 }
