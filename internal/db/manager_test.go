@@ -10,26 +10,20 @@ import (
 )
 
 func TestOpenManagerDB(t *testing.T) {
-	// Remove existing db to test auto-creation
-	home, _ := os.UserHomeDir()
-	dbPath := home + "/.local/share/oc-manager/manager.db"
-	os.Remove(dbPath) // ok if not exists
-
-	mgr, err := db.OpenManagerDB()
+	dir := t.TempDir()
+	mgr, err := db.OpenManagerDBAt(dir)
 	if err != nil {
 		t.Fatalf("open manager db: %v", err)
 	}
 	defer mgr.Close()
 
-	// Verify file was created
-	if _, err := os.Stat(dbPath); err != nil {
+	if _, err := os.Stat(dir + "/manager.db"); err != nil {
 		t.Fatalf("manager.db not created: %v", err)
 	}
-	t.Log("manager.db auto-created successfully")
 }
 
 func TestTagRoundTrip(t *testing.T) {
-	mgr, err := db.OpenManagerDB()
+	mgr, err := db.OpenManagerDBAt(t.TempDir())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -74,7 +68,7 @@ func TestTagRoundTrip(t *testing.T) {
 }
 
 func TestManagerDB(t *testing.T) {
-	mgr, err := db.OpenManagerDB()
+	mgr, err := db.OpenManagerDBAt(t.TempDir())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

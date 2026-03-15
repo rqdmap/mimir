@@ -18,28 +18,32 @@ func OpenManagerDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
-	dbDir := filepath.Join(home, ".local", "share", "oc-manager")
+	return openManagerDBAt(filepath.Join(home, ".local", "share", "oc-manager"))
+}
+
+func OpenManagerDBAt(dbDir string) (*sql.DB, error) {
+	return openManagerDBAt(dbDir)
+}
+
+func openManagerDBAt(dbDir string) (*sql.DB, error) {
 	dbPath := filepath.Join(dbDir, "manager.db")
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dbDir, err)
 	}
-
-	db, err := sql.Open("sqlite", dbPath)
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open manager.db: %w", err)
 	}
-
 	if err := runManagerSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("schema migration: %w", err)
 	}
-
 	return db, nil
 }
 
 func runManagerSchema(db *sql.DB) error {
 	stmts := []string{
-		`PRAGMA journal_mode=WAL`,
 		`CREATE TABLE IF NOT EXISTS session_meta (
 			session_id   TEXT PRIMARY KEY,
 			note         TEXT,
@@ -56,11 +60,6 @@ func runManagerSchema(db *sql.DB) error {
 			source_session_id TEXT,
 			time_created      INTEGER NOT NULL,
 			time_updated      INTEGER NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS idea_tag (
-			idea_id  TEXT NOT NULL,
-			tag_name TEXT NOT NULL,
-			PRIMARY KEY (idea_id, tag_name)
 		)`,
 		`CREATE TABLE IF NOT EXISTS idea_tag (
 			idea_id  TEXT NOT NULL,
