@@ -115,9 +115,8 @@ func RenderMarkdown(sess model.Session, messages []model.Message, tags []string,
 			sb.WriteString("\n</details>\n\n")
 		}
 
-		// Main text
 		for _, t := range textParts {
-			sb.WriteString(t)
+			sb.WriteString(shiftHeadings(t, 2))
 			if !strings.HasSuffix(t, "\n") {
 				sb.WriteString("\n")
 			}
@@ -157,6 +156,17 @@ func Slugify(title string) string {
 		s = s[:80]
 	}
 	return s
+}
+
+func shiftHeadings(text string, levels int) string {
+	lines := strings.Split(text, "\n")
+	extra := strings.Repeat("#", levels)
+	for i, line := range lines {
+		if strings.HasPrefix(line, "#") && (len(line) == 1 || line[1] == '#' || line[1] == ' ') {
+			lines[i] = extra + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderToolBlock(part model.Part) string {
