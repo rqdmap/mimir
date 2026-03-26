@@ -44,8 +44,8 @@ func RenderMarkdown(sess model.Session, messages []model.Message, tags []string,
 			tagStr := strings.Join(tags, ", ")
 			sb.WriteString(fmt.Sprintf("| **Tags** | %s |\n", tagStr))
 		}
-		created := time.Unix(0, sess.TimeCreated*int64(time.Millisecond)).UTC().Format("2006-01-02 15:04:05 UTC")
-		updated := time.Unix(0, sess.TimeUpdated*int64(time.Millisecond)).UTC().Format("2006-01-02 15:04:05 UTC")
+		created := time.Unix(0, sess.TimeCreated*int64(time.Millisecond)).Local().Format("2006-01-02 15:04:05")
+		updated := time.Unix(0, sess.TimeUpdated*int64(time.Millisecond)).Local().Format("2006-01-02 15:04:05")
 		sb.WriteString(fmt.Sprintf("| **Created** | %s |\n", created))
 		sb.WriteString(fmt.Sprintf("| **Updated** | %s |\n", updated))
 		sb.WriteString(fmt.Sprintf("| **Messages** | %d |\n", len(messages)))
@@ -100,7 +100,7 @@ func RenderMarkdown(sess model.Session, messages []model.Message, tags []string,
 
 		// Message header
 		role := strings.ToUpper(msg.Role[:1]) + msg.Role[1:]
-		ts := time.Unix(0, msg.TimeCreated*int64(time.Millisecond)).UTC().Format("15:04:05")
+		ts := time.Unix(0, msg.TimeCreated*int64(time.Millisecond)).Local().Format("15:04:05")
 		sb.WriteString(fmt.Sprintf("## %s  <sup>%s</sup>\n\n", role, ts))
 
 		// Reasoning (collapsible)
