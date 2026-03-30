@@ -22,10 +22,13 @@ func OpenOpencodeDB() (*sql.DB, error) {
 	}
 	dbPath := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 	// MUST use ?mode=ro to enforce read-only.
-	// Do NOT set _journal_mode on a read-only connection — it would attempt
+	// Do NOT set journal_mode on a read-only connection — it would attempt
 	// a write and fail with SQLITE_READONLY. WAL mode is managed by opencode.
-	// _busy_timeout gives us a grace period when opencode holds a write lock.
-	dsn := fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000&_cache_size=-65536&mmap_size=536870912", dbPath)
+	//
+	// IMPORTANT: modernc.org/sqlite uses _pragma=NAME(VALUE) syntax, NOT
+	// _busy_timeout= or _journal_mode= (those are mattn/go-sqlite3 format
+	// and are silently ignored by modernc).
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=cache_size(-65536)&_pragma=mmap_size(536870912)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
