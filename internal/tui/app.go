@@ -86,10 +86,11 @@ type sessionsBatchLoadedMsg struct {
 }
 
 type statsDataLoadedMsg struct {
-	period model.StatsPeriod
-	models []model.ModelStat
-	agents []model.AgentStat
-	daily  []model.DailyPoint
+	period       model.StatsPeriod
+	models       []model.ModelStat
+	agents       []model.AgentStat
+	daily        []model.DailyPoint
+	userRequests int
 }
 
 type sessionUsageLoadedMsg struct {
@@ -580,7 +581,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case statsDataLoadedMsg:
-		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily)
+		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily, msg.userRequests)
 		return a, nil
 
 	case sessionUsageLoadedMsg:
@@ -897,29 +898,35 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "shift+tab":
+		if a.activeTab == TabStats {
+			var cmd tea.Cmd
+			a.statsView, cmd = a.statsView.handleKey(msg)
+			return a, cmd
+		}
 		a.cycleFocusBackward()
 		return a, nil
 	}
 
 	if a.activeTab == TabStats {
-		switch key {
-		case "1":
-			a.statsView.loading = true
-			return a, a.loadStatsDataCmd(model.PeriodToday)
-		case "7":
-			a.statsView.loading = true
-			return a, a.loadStatsDataCmd(model.Period7d)
-		case "3":
-			a.statsView.loading = true
-			return a, a.loadStatsDataCmd(model.Period30d)
-		case "0":
-			a.statsView.loading = true
-			return a, a.loadStatsDataCmd(model.PeriodAll)
-		default:
-			var cmd tea.Cmd
-			a.statsView, cmd = a.statsView.handleKey(msg)
-			return a, cmd
+		if a.statsView.section != statsSectionChart {
+			switch key {
+			case "1":
+				a.statsView.loading = true
+				return a, a.loadStatsDataCmd(model.PeriodToday)
+			case "7":
+				a.statsView.loading = true
+				return a, a.loadStatsDataCmd(model.Period7d)
+			case "3":
+				a.statsView.loading = true
+				return a, a.loadStatsDataCmd(model.Period30d)
+			case "0":
+				a.statsView.loading = true
+				return a, a.loadStatsDataCmd(model.PeriodAll)
+			}
 		}
+		var cmd tea.Cmd
+		a.statsView, cmd = a.statsView.handleKey(msg)
+		return a, cmd
 	}
 
 	if key == "t" {
@@ -1193,7 +1200,7 @@ func (a *App) recalcLayout() tea.Cmd {
 	if contentW < 4 {
 		contentW = 4
 	}
-	a.statsView.SetSize(contentW, h)
+	a.statsView.SetSize(contentW, h-1)
 	return tea.Batch(cmds...)
 }
 
@@ -1386,8 +1393,9 @@ func (a App) loadStatsDataCmd(period model.StatsPeriod) tea.Cmd {
 		since := sinceMs(period)
 		models, _ := db.GetUsageByModel(ocDB, since)
 		agents, _ := db.GetUsageByAgent(ocDB, since)
-		daily, _ := db.GetDailyUsage(ocDB, since)
-		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily}
+		daily, _ := db.GetDailyUsage(ocDB, 0)
+		userReqs, _ := db.GetUserRequestCount(ocDB, since)
+		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily, userRequests: userReqs}
 	}
 }
 
@@ -1706,7 +1714,7 @@ func (a App) buildStatusBar() string {
 			return statusStyle.Render(filterBar)
 		}
 	case TabStats:
-		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  m: metric  S: stats tab")
+		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  ←/→: chart scroll  S: stats tab")
 	}
 
 	if a.loading && a.totalCount > 0 {

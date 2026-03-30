@@ -422,6 +422,7 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 			JSON_EXTRACT(data, '$.modelID')    AS modelID,
 			JSON_EXTRACT(data, '$.providerID') AS providerID,
 			COUNT(*)                           AS turns,
+			COUNT(DISTINCT session_id)         AS requests,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cacheRead
@@ -447,7 +448,7 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 	var results []model.ModelStat
 	for rows.Next() {
 		var s model.ModelStat
-		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.InputTokens, &s.OutputTokens, &s.CacheRead); err != nil {
+		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens, &s.CacheRead); err != nil {
 			return nil, fmt.Errorf("scan model stat: %w", err)
 		}
 		total := s.InputTokens + s.CacheRead
@@ -469,6 +470,7 @@ func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
 		SELECT
 			LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) AS agent,
 			COUNT(*)                                                  AS turns,
+			COUNT(DISTINCT session_id)                                AS requests,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')  AS INTEGER)), 0) AS inputTokens,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output') AS INTEGER)), 0) AS outputTokens
 		FROM message
@@ -493,7 +495,7 @@ func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
 	var results []model.AgentStat
 	for rows.Next() {
 		var s model.AgentStat
-		if err := rows.Scan(&s.Agent, &s.Turns, &s.InputTokens, &s.OutputTokens); err != nil {
+		if err := rows.Scan(&s.Agent, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens); err != nil {
 			return nil, fmt.Errorf("scan agent stat: %w", err)
 		}
 		results = append(results, s)
@@ -553,6 +555,20 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 		return nil, fmt.Errorf("rows error (daily usage): %w", err)
 	}
 	return results, nil
+}
+
+func GetUserRequestCount(db *sql.DB, since int64) (int, error) {
+	query := `SELECT COUNT(*) FROM message WHERE JSON_EXTRACT(data, '$.role') = 'user'`
+	args := []interface{}{}
+	if since > 0 {
+		query += ` AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	var n int
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("query user request count: %w", err)
+	}
+	return n, nil
 }
 
 // GetSessionUsage returns a complete token usage summary for a single session.

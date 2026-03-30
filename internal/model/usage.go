@@ -7,6 +7,7 @@ type ModelStat struct {
 	ModelID      string
 	ProviderID   string
 	Turns        int
+	Requests     int
 	InputTokens  int64
 	OutputTokens int64
 	CacheRead    int64
@@ -17,6 +18,7 @@ type ModelStat struct {
 type AgentStat struct {
 	Agent        string // normalized to lowercase by DB query
 	Turns        int
+	Requests     int
 	InputTokens  int64
 	OutputTokens int64
 }

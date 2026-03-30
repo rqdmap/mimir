@@ -11,12 +11,18 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
   <img src="assets/main.png" alt="mimir" width="800">
 </p>
 
+<p align="center">
+  <img src="assets/stats-chart.png" alt="Daily usage chart" width="395">
+  <img src="assets/stats-model.png" alt="Usage by model" width="395">
+</p>
+
 ## Features
 
-- **Three-tab interface** — Sessions, Ideas, and Tags tabs with `[` / `]` cycling
+- **Four-tab interface** — Sessions, Ideas, Tags, and Stats tabs with `[` / `]` cycling
 - **Session browser** — browse all OpenCode sessions with live search, tag filtering, and sub-agent toggle
 - **Conversation viewer** — read full AI conversations with glamour-rendered markdown, tool call & subtask display, and vim-style `/` search with `n`/`N` navigation
-- **Metadata pane** — view session tags, linked ideas, and message stats at a glance
+- **Metadata pane** — view session tags, linked ideas, message stats, and per-session token usage at a glance
+- **Stats dashboard** — token usage analytics with by-model and by-agent breakdowns, daily usage braille line charts, and per-session cost in the metadata pane; switch time periods with `1`/`7`/`3`/`0`
 - **Idea notebook** — capture ideas linked to sessions; idea body rendered in the conversation pane, `Tab` toggles between idea content and linked session conversation; `E` opens idea in `$EDITOR`
 - **Tag management** — create, rename, delete tags; filter sessions by tag; manage tag-session associations
 - **Markdown export** — export any session as `.md` with selectable content (messages, metadata, tool calls, reasoning)
@@ -57,8 +63,8 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
   "theme": "gruvbox",
   "export_dir": "~/exports",
   "layout": {
-    "list_ratio": 0.27,
-    "meta_ratio": 0.16
+    "ratio": [2, 5, 2],
+    "tab_order": ["ideas", "sessions", "tags"]
   }
 }
 ```
@@ -68,8 +74,8 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
 | `auto_preview` | `false` | Auto-load conversation when navigating sessions (lazygit-style) |
 | `theme` | `"gruvbox"` | Color theme — `"gruvbox"` or `"default"` |
 | `export_dir` | `""` (cwd) | Directory for exported markdown files |
-| `layout.list_ratio` | `0.27` | Left pane width as fraction of terminal width |
-| `layout.meta_ratio` | `0.16` | Right metadata pane width as fraction |
+| `layout.ratio` | `[2, 5, 2]` | Three-pane width ratio (left : center : right), integers |
+| `layout.tab_order` | `["ideas", "sessions", "tags"]` | Tab display order; add `"stats"` to enable the Stats tab |
 
 The theme can also be overridden with the `MIMIR_THEME` environment variable.
 
@@ -103,6 +109,7 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 | `[` / `]` | Cycle left-pane tabs (Ideas / Sessions / Tags) |
 | `I` | Jump to Ideas tab |
 | `T` | Jump to Tags tab |
+| `S` | Jump to Stats tab |
 | `A` | Toggle sub-agent session visibility |
 | `/` | Search within current tab or conversation |
 | `r` | Refresh current tab |
@@ -151,6 +158,15 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 | `Enter` | View sessions with this tag |
 | `d` | Delete tag (with confirmation) |
 | `r` | Rename tag |
+
+### Stats Tab
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle sections (Chart → By Model → By Agent) |
+| `j` `k` / `↑` `↓` | Navigate table rows |
+| `g` / `G` | Jump to top / bottom of table |
+| `1` / `7` / `3` / `0` | Switch period: 1 day / 7 days / 30 days / all time |
 
 ## How It Works
 
