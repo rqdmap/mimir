@@ -425,7 +425,8 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 			COUNT(DISTINCT session_id)         AS requests,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cacheRead
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
 		FROM message
 		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
 		  AND JSON_EXTRACT(data, '$.modelID') IS NOT NULL`
@@ -448,10 +449,10 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 	var results []model.ModelStat
 	for rows.Next() {
 		var s model.ModelStat
-		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens, &s.CacheRead); err != nil {
+		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheWrite); err != nil {
 			return nil, fmt.Errorf("scan model stat: %w", err)
 		}
-		total := s.InputTokens + s.CacheRead
+		total := s.InputTokens + s.CacheRead + s.CacheWrite
 		if total > 0 {
 			s.CachePercent = float64(s.CacheRead) / float64(total) * 100.0
 		}
@@ -515,7 +516,8 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 			COUNT(*)                                                                                    AS turns,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
 			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cacheRead
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
 		FROM message
 		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'`
 	args := []interface{}{}
@@ -538,7 +540,7 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 	for rows.Next() {
 		var dayStr sql.NullString
 		var dp model.DailyPoint
-		if err := rows.Scan(&dayStr, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead); err != nil {
+		if err := rows.Scan(&dayStr, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead, &dp.CacheWrite); err != nil {
 			return nil, fmt.Errorf("scan daily point: %w", err)
 		}
 		if !dayStr.Valid || dayStr.String == "" {
@@ -584,17 +586,18 @@ func GetSessionUsage(db *sql.DB, sessionID string) (model.SessionUsage, error) {
 
 	if err := db.QueryRow(
 		`SELECT COUNT(*),
-			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.input')      AS INTEGER)), 0),
-			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.output')     AS INTEGER)), 0),
-			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.cache.read') AS INTEGER)), 0)
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.input')       AS INTEGER)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.output')      AS INTEGER)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.cache.read')  AS INTEGER)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.cache.write') AS INTEGER)), 0)
 		FROM message
 		WHERE session_id=? AND JSON_EXTRACT(data,'$.role')='assistant'`,
 		sessionID,
-	).Scan(&su.AITurns, &su.InputTokens, &su.OutputTokens, &su.CacheRead); err != nil {
+	).Scan(&su.AITurns, &su.InputTokens, &su.OutputTokens, &su.CacheRead, &su.CacheWrite); err != nil {
 		return model.SessionUsage{}, fmt.Errorf("query ai turns: %w", err)
 	}
 
-	total := su.InputTokens + su.CacheRead
+	total := su.InputTokens + su.CacheRead + su.CacheWrite
 	if total > 0 {
 		su.CachePercent = float64(su.CacheRead) / float64(total) * 100.0
 	}

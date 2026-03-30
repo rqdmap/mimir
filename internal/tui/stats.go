@@ -140,7 +140,7 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 
 	for _, dp := range points {
 		t := dp.Date
-		v.chartContext.Push(tslc.TimePoint{Time: t, Value: float64(dp.InputTokens + dp.CacheRead)})
+		v.chartContext.Push(tslc.TimePoint{Time: t, Value: float64(dp.InputTokens + dp.CacheRead + dp.CacheWrite)})
 		v.chartOutput.Push(tslc.TimePoint{Time: t, Value: float64(dp.OutputTokens)})
 		v.chartTurns.Push(tslc.TimePoint{Time: t, Value: float64(dp.Turns)})
 	}
@@ -249,13 +249,14 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 }
 
 func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.Style) string {
-	var input, output, cacheRead int64
+	var input, output, cacheRead, cacheWrite int64
 	topModel := ""
 
 	for i, s := range v.modelStats {
 		input += s.InputTokens
 		output += s.OutputTokens
 		cacheRead += s.CacheRead
+		cacheWrite += s.CacheWrite
 		if i == 0 {
 			topModel = s.ModelID
 		}
@@ -266,7 +267,7 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	}
 
 	var cachePercent float64
-	total := input + cacheRead
+	total := input + cacheRead + cacheWrite
 	if total > 0 {
 		cachePercent = float64(cacheRead) / float64(total) * 100
 	}

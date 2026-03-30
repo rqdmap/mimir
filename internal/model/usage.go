@@ -11,6 +11,7 @@ type ModelStat struct {
 	InputTokens  int64
 	OutputTokens int64
 	CacheRead    int64
+	CacheWrite   int64
 	CachePercent float64 // 0.0 when CacheRead == 0
 }
 
@@ -30,6 +31,7 @@ type DailyPoint struct {
 	InputTokens  int64
 	OutputTokens int64
 	CacheRead    int64
+	CacheWrite   int64
 }
 
 // SessionUsage represents complete token usage summary for a session
@@ -39,6 +41,7 @@ type SessionUsage struct {
 	InputTokens  int64
 	OutputTokens int64
 	CacheRead    int64
+	CacheWrite   int64
 	CachePercent float64  // 0.0 when CacheRead == 0
 	Models       []string // model names ordered by usage count descending
 }

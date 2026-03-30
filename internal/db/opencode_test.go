@@ -106,7 +106,7 @@ func TestGetUsageByModel(t *testing.T) {
 	d := newInMemoryOpencodeDB(t)
 	defer d.Close()
 
-	// Insert 2 messages for claude-sonnet-4-5 (input=1000, output=200, cacheRead=500 each)
+	// Insert 2 messages for claude-sonnet-4-5 (input=1000, output=200, cacheRead=500, cacheWrite=300 each)
 	insertMessage(t, d, "msg1", "session-1", map[string]interface{}{
 		"role":       "assistant",
 		"modelID":    "claude-sonnet-4-5",
@@ -115,7 +115,8 @@ func TestGetUsageByModel(t *testing.T) {
 			"input":  1000,
 			"output": 200,
 			"cache": map[string]interface{}{
-				"read": 500,
+				"read":  500,
+				"write": 300,
 			},
 		},
 		"time": map[string]interface{}{
@@ -130,7 +131,8 @@ func TestGetUsageByModel(t *testing.T) {
 			"input":  1000,
 			"output": 200,
 			"cache": map[string]interface{}{
-				"read": 500,
+				"read":  500,
+				"write": 300,
 			},
 		},
 		"time": map[string]interface{}{
@@ -178,10 +180,13 @@ func TestGetUsageByModel(t *testing.T) {
 	if results[0].CacheRead != 1000 {
 		t.Errorf("expected 1000 cache read, got %d", results[0].CacheRead)
 	}
-	// CachePercent = 1000 / (2000 + 1000) * 100 = 33.33%
-	expectedCP := 100.0 * 1000.0 / 3000.0
+	if results[0].CacheWrite != 600 {
+		t.Errorf("expected 600 cache write, got %d", results[0].CacheWrite)
+	}
+	// CachePercent = 1000 / (2000 + 1000 + 600) * 100 = 27.78%
+	expectedCP := 100.0 * 1000.0 / 3600.0
 	if results[0].CachePercent <= 0 || results[0].CachePercent < expectedCP-1 {
-		t.Errorf("expected cache percent > 33%%, got %f", results[0].CachePercent)
+		t.Errorf("expected cache percent ~%.1f%%, got %f", expectedCP, results[0].CachePercent)
 	}
 
 	// Second result: gpt-4o
@@ -422,7 +427,7 @@ func TestGetSessionUsage(t *testing.T) {
 		},
 	})
 
-	// Insert 3 assistant messages for session-1 (input=1000, output=200, cache=500 each)
+	// Insert 3 assistant messages for session-1 (input=1000, output=200, cache read=500, cache write=200 each)
 	insertMessage(t, d, "ai1", "session-1", map[string]interface{}{
 		"role":       "assistant",
 		"modelID":    "claude-sonnet-4-5",
@@ -431,7 +436,8 @@ func TestGetSessionUsage(t *testing.T) {
 			"input":  1000,
 			"output": 200,
 			"cache": map[string]interface{}{
-				"read": 500,
+				"read":  500,
+				"write": 200,
 			},
 		},
 		"time": map[string]interface{}{
@@ -446,7 +452,8 @@ func TestGetSessionUsage(t *testing.T) {
 			"input":  1000,
 			"output": 200,
 			"cache": map[string]interface{}{
-				"read": 500,
+				"read":  500,
+				"write": 200,
 			},
 		},
 		"time": map[string]interface{}{
@@ -461,7 +468,8 @@ func TestGetSessionUsage(t *testing.T) {
 			"input":  1000,
 			"output": 200,
 			"cache": map[string]interface{}{
-				"read": 500,
+				"read":  500,
+				"write": 200,
 			},
 		},
 		"time": map[string]interface{}{
@@ -504,9 +512,13 @@ func TestGetSessionUsage(t *testing.T) {
 	if su.CacheRead != 1500 {
 		t.Errorf("expected 1500 cache read, got %d", su.CacheRead)
 	}
-	// CachePercent = 1500 / (3000 + 1500) * 100 = 33.33%
-	if su.CachePercent <= 0 || su.CachePercent < 33 {
-		t.Errorf("expected cache percent > 33%%, got %f", su.CachePercent)
+	if su.CacheWrite != 600 {
+		t.Errorf("expected 600 cache write, got %d", su.CacheWrite)
+	}
+	// CachePercent = 1500 / (3000 + 1500 + 600) * 100 = 29.41%
+	expectedCP := 100.0 * 1500.0 / 5100.0
+	if su.CachePercent <= 0 || su.CachePercent < expectedCP-1 {
+		t.Errorf("expected cache percent ~%.1f%%, got %f", expectedCP, su.CachePercent)
 	}
 	if len(su.Models) < 1 {
 		t.Fatalf("expected at least 1 model, got %d", len(su.Models))
