@@ -877,6 +877,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if a.activeTab == TabIdeas && a.focus == FocusSessionList {
+		if a.ideasView.confirmDel {
+			var cmd tea.Cmd
+			a.ideasView, cmd = a.ideasView.Update(msg)
+			return a, cmd
+		}
 		if key == "E" {
 			if idea := a.ideasView.SelectedIdea(); idea != nil {
 				return a, a.openIdeaInEditor(idea.ID, idea.Content)
@@ -884,29 +889,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if key == "enter" {
-			idea := a.ideasView.SelectedIdea()
-			if idea == nil {
-				return a, nil
+			if a.ideasView.SelectedIdea() != nil {
+				a.setFocus(FocusConversation)
 			}
-			if idea.SourceSessionID == "" {
-				a.err = "No linked session"
-				return a, nil
-			}
-			// Find the session and jump to it
-			a.activeTab = TabSessions
-			for _, s := range a.sessions {
-				if s.ID == idea.SourceSessionID {
-					a.selectedSession = &s
-					a.sessionList.SelectByID(s.ID)
-					a.metadata.ClearSession()
-					a.conversation.SetMessages(nil, "")
-					if a.opencodeDB != nil {
-						return a, a.loadSession(s)
-					}
-					return a, nil
-				}
-			}
-			a.err = "Session not found"
 			return a, nil
 		}
 		var cmd tea.Cmd
@@ -1631,7 +1616,7 @@ func (a App) buildStatusBar() string {
 			if a.ideaShowConv {
 				ideaHint = "[Tab] show idea"
 			}
-			parts = append(parts, "[↑↓/jk] navigate  [e] edit  [E] $EDITOR  [d] delete  [Enter] jump  [/] search  "+ideaHint+"  [[]]] switch tab")
+			parts = append(parts, "[↑↓/jk] navigate  [e] edit  [E] $EDITOR  [d] delete  [Enter] open ▸  [/] search  "+ideaHint+"  [[]]] switch tab")
 		case TabTags:
 			parts = append(parts, "[↑↓/jk] navigate  [Enter] view sessions  [d] delete  [r] rename  [/] search  [Esc] clear")
 		default:
@@ -1689,7 +1674,7 @@ func (a App) overlayHelp(background string) string {
   [Esc / Enter]     Exit search
 
   In Ideas Tab:
-  [Enter]           Jump to linked session
+  [Enter]           Focus conversation pane
   [e]               Edit idea
   [d]               Delete idea (confirm y/n)
 

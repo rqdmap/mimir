@@ -138,7 +138,7 @@ func (v IdeasView) Update(msg tea.Msg) (IdeasView, tea.Cmd) {
 	case tea.KeyMsg:
 		if v.confirmDel {
 			switch msg.String() {
-			case "y", "Y":
+			case "y", "Y", "enter":
 				targetID := v.deleteTarget
 				cmd = func() tea.Msg { return DeleteIdeaConfirmedMsg{ID: targetID} }
 				cmds = append(cmds, cmd)
@@ -222,7 +222,7 @@ func (v IdeasView) viewEmpty() string {
 }
 
 func (v IdeasView) overlayConfirmation(background string) string {
-	modalText := fmt.Sprintf("Delete idea?\n\n\"%s\"\n\n[y/N]", v.truncatedDeleteTarget())
+	modalText := fmt.Sprintf("Delete idea?\n\n\"%s\"\n\n[y/Enter/N]", v.truncatedDeleteTarget())
 
 	modal := lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
