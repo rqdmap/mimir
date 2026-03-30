@@ -12,9 +12,21 @@ import (
 	"github.com/local/oc-manager/internal/tui/panes"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	listSessions := flag.Bool("list-sessions", false, "List sessions and exit")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("ocm %s (commit: %s, built: %s)\n", version, commit, date)
+		os.Exit(0)
+	}
 
 	opencodeDB, err := db.OpenOpencodeDB()
 	if err != nil {

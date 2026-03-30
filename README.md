@@ -59,23 +59,23 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
 
 ```json
 {
-  "auto_preview": false,
+  "auto_preview": true,
   "theme": "gruvbox",
-  "export_dir": "~/exports",
+  "export_dir": "~/mimir-exports",
   "layout": {
-    "ratio": [2, 5, 2],
-    "tab_order": ["ideas", "sessions", "tags"]
+    "ratio": [1, 4, 1],
+    "tab_order": ["sessions", "ideas", "tags", "stats"]
   }
 }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `auto_preview` | `false` | Auto-load conversation when navigating sessions (lazygit-style) |
+| `auto_preview` | `true` | Auto-load conversation when navigating sessions (lazygit-style) |
 | `theme` | `"gruvbox"` | Color theme — `"gruvbox"` or `"default"` |
-| `export_dir` | `""` (cwd) | Directory for exported markdown files |
-| `layout.ratio` | `[2, 5, 2]` | Three-pane width ratio (left : center : right), integers |
-| `layout.tab_order` | `["ideas", "sessions", "tags"]` | Tab display order; add `"stats"` to enable the Stats tab |
+| `export_dir` | `"~/mimir-exports"` | Directory for exported markdown files (prompts to create if it doesn't exist) |
+| `layout.ratio` | `[1, 4, 1]` | Three-pane width ratio (left : center : right), integers |
+| `layout.tab_order` | `["sessions", "ideas", "tags", "stats"]` | Tab display order |
 
 The theme can also be overridden with the `MIMIR_THEME` environment variable.
 
@@ -167,6 +167,7 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 | `j` `k` / `↑` `↓` | Navigate table rows |
 | `g` / `G` | Jump to top / bottom of table |
 | `1` / `7` / `3` / `0` | Switch period: 1 day / 7 days / 30 days / all time |
+| `/` | Filter By Model / By Agent lists (matches model, provider, or agent name) |
 
 ## How It Works
 
