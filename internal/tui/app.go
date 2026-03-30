@@ -55,6 +55,16 @@ type ideasLoadedMsg struct {
 
 type errMsg struct{ err string }
 
+// confirmCreateDirMsg is sent when doExport detects the target directory
+// does not exist, so we can ask the user whether to create it.
+type confirmCreateDirMsg struct {
+	dir  string
+	sess model.Session
+	msgs []model.Message
+	tags []string
+	opts export.Options
+}
+
 type clearFlashMsg struct{}
 
 type flashMsg struct {
@@ -138,6 +148,13 @@ type App struct {
 	flash               flashMsg
 	searchMode          bool
 	searchQuery         string
+
+	confirmCreateDir    bool
+	pendingCreateDir    string
+	pendingExportSess   model.Session
+	pendingExportMsgs   []model.Message
+	pendingExportTags   []string
+	pendingExportOpts   export.Options
 
 	ideasSearchQuery string
 	tagsSearchQuery  string
@@ -576,6 +593,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return clearFlashMsg{}
 		})
 
+	case confirmCreateDirMsg:
+		a.confirmCreateDir = true
+		a.pendingCreateDir = msg.dir
+		a.pendingExportSess = msg.sess
+		a.pendingExportMsgs = msg.msgs
+		a.pendingExportTags = msg.tags
+		a.pendingExportOpts = msg.opts
+		return a, nil
+
 	case clearFlashMsg:
 		a.flash = flashMsg{}
 		return a, nil
@@ -632,6 +658,11 @@ func (a App) View() string {
 	// InputMode overlay takes full screen when active.
 	if a.inputMode.IsActive() {
 		return a.inputMode.View()
+	}
+
+	// Confirm-create-directory overlay
+	if a.confirmCreateDir {
+		return a.viewConfirmCreateDir()
 	}
 
 	// Status bar line
@@ -720,6 +751,42 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.showHelp = false
 		return a, nil
+	}
+
+	// Confirm-create-directory dialog
+	if a.confirmCreateDir {
+		switch key {
+		case "ctrl+c":
+			return a, tea.Quit
+		case "y", "Y", "enter":
+			dir := a.pendingCreateDir
+			sess := a.pendingExportSess
+			msgs := a.pendingExportMsgs
+			tags := a.pendingExportTags
+			opts := a.pendingExportOpts
+			a.confirmCreateDir = false
+			a.pendingCreateDir = ""
+			return a, func() tea.Msg {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return ExportDoneMsg{Err: fmt.Errorf("create directory: %w", err)}
+				}
+				md := export.RenderMarkdown(sess, msgs, tags, opts)
+				slug := export.Slugify(sess.Title)
+				path := filepath.Join(dir, slug+".md")
+				if err := os.WriteFile(path, []byte(md), 0644); err != nil {
+					return ExportDoneMsg{Err: err}
+				}
+				return ExportDoneMsg{Path: path}
+			}
+		default:
+			// Any other key cancels
+			a.confirmCreateDir = false
+			a.pendingCreateDir = ""
+			a.flash = flashMsg{text: "Export cancelled"}
+			return a, tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+				return clearFlashMsg{}
+			})
+		}
 	}
 
 	// Conversation search mode — forward ALL keys directly to the pane
@@ -1546,17 +1613,50 @@ func (a *App) tryAutoLoadSelected() tea.Cmd {
 	return nil
 }
 
+// expandTilde replaces a leading "~/" or bare "~" with the user's home directory.
+func expandTilde(path string) string {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
 // doExport writes the session as a Markdown file asynchronously.
 func (a App) doExport(sess model.Session, messages []model.Message, tags []string, opts export.Options, dir string) tea.Cmd {
 	return func() tea.Msg {
-		md := export.RenderMarkdown(sess, messages, tags, opts)
 		if dir == "" {
 			var err error
 			dir, err = os.Getwd()
 			if err != nil {
 				return ExportDoneMsg{Err: err}
 			}
+		} else {
+			dir = expandTilde(dir)
 		}
+
+		// If the directory does not exist, ask the user before creating it.
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return confirmCreateDirMsg{
+				dir:  dir,
+				sess: sess,
+				msgs: messages,
+				tags: tags,
+				opts: opts,
+			}
+		}
+
+		md := export.RenderMarkdown(sess, messages, tags, opts)
 		slug := export.Slugify(sess.Title)
 		path := filepath.Join(dir, slug+".md")
 		if err := os.WriteFile(path, []byte(md), 0644); err != nil {
@@ -1810,6 +1910,38 @@ func (a App) overlayHelp(background string) string {
 		Render(lipgloss.NewStyle().Foreground(a.theme.TextMuted).Render(helpText))
 
 	_ = background // background string not layered — just show centered help
+	return lipgloss.Place(
+		a.width, a.height,
+		lipgloss.Center, lipgloss.Center,
+		box,
+	)
+}
+
+func (a App) viewConfirmCreateDir() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(a.theme.Accent)
+	normalStyle := lipgloss.NewStyle().Foreground(a.theme.TextNormal)
+	pathStyle := lipgloss.NewStyle().Foreground(a.theme.BorderFocused).Bold(true)
+	hintStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted).Italic(true)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render("Create Directory?"),
+		"",
+		normalStyle.Render("Export directory does not exist:"),
+		"",
+		pathStyle.Render("  "+a.pendingCreateDir),
+		"",
+		normalStyle.Render("Create it now?"),
+		"",
+		hintStyle.Render("[y/Enter] create   [any other key] cancel"),
+	)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(a.theme.AccentBg).
+		Padding(1, 3).
+		Width(60).
+		Render(content)
+
 	return lipgloss.Place(
 		a.width, a.height,
 		lipgloss.Center, lipgloss.Center,
