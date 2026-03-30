@@ -13,8 +13,8 @@ var validTabNames = map[string]bool{
 	"stats":    true,
 }
 
-var DefaultTabOrder = []string{"ideas", "sessions", "tags"}
-var DefaultRatio = []int{2, 5, 2}
+var DefaultTabOrder = []string{"sessions", "ideas", "tags", "stats"}
+var DefaultRatio = []int{1, 4, 1}
 
 type LayoutConfig struct {
 	Ratio    []int    `json:"ratio"`
@@ -33,9 +33,9 @@ type Config struct {
 
 func defaultConfig() Config {
 	return Config{
-		AutoPreview: false,
-		Theme:       "",
-		ExportDir:   "",
+		AutoPreview: true,
+		Theme:       "gruvbox",
+		ExportDir:   "~/mimir-exports",
 		Layout: LayoutConfig{
 			Ratio:    append([]int{}, DefaultRatio...),
 			TabOrder: append([]string{}, DefaultTabOrder...),
