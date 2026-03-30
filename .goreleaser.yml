@@ -5,9 +5,9 @@ before:
     - go mod tidy
 
 builds:
-  - id: ocm
-    main: ./cmd/ocm
-    binary: ocm
+  - id: mimir
+    main: ./cmd/mimir
+    binary: mimir
     env:
       - CGO_ENABLED=0
     goos:

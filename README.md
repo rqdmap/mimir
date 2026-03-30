@@ -39,9 +39,9 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
 ```bash
 git clone https://github.com/rqdmap/mimir
 cd mimir
-go build -o ocm ./cmd/ocm/
+go build -o mimir ./cmd/mimir/
 # Move to somewhere in your $PATH
-mv ocm ~/.local/bin/
+mv mimir ~/.local/bin/
 ```
 
 **Requirements:** Go 1.25+, [OpenCode](https://opencode.ai) installed and used at least once.
@@ -49,8 +49,8 @@ mv ocm ~/.local/bin/
 ## Usage
 
 ```bash
-ocm                    # Launch TUI
-ocm --list-sessions    # Print all sessions to stdout and exit
+mimir                    # Launch TUI
+mimir --list-sessions    # Print all sessions to stdout and exit
 ```
 
 ## Configuration

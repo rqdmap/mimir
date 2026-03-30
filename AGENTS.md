@@ -9,7 +9,7 @@ This is a **highly vibe-coded** project — the TUI has complex, interconnected 
 ## Architecture
 
 ```
-cmd/ocm/main.go          — entry point, flag parsing, DB init
+cmd/mimir/main.go         — entry point, flag parsing, DB init
 internal/
   config/config.go        — JSON config loading (~/.config/mimir/config.json)
   db/

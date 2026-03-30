@@ -24,7 +24,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("ocm %s (commit: %s, built: %s)\n", version, commit, date)
+		fmt.Printf("mimir %s (commit: %s, built: %s)\n", version, commit, date)
 		os.Exit(0)
 	}
 
