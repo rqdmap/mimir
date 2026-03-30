@@ -2,6 +2,7 @@ package export
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -107,7 +108,7 @@ func RenderMarkdown(sess model.Session, messages []model.Message, tags []string,
 		if len(reasoningParts) > 0 {
 			sb.WriteString("<details>\n<summary>Reasoning</summary>\n\n")
 			for _, r := range reasoningParts {
-				sb.WriteString(r)
+				sb.WriteString(bumpHeadings(r, 2))
 				if !strings.HasSuffix(r, "\n") {
 					sb.WriteString("\n")
 				}
@@ -116,7 +117,7 @@ func RenderMarkdown(sess model.Session, messages []model.Message, tags []string,
 		}
 
 		for _, t := range textParts {
-			sb.WriteString(shiftHeadings(t, 2))
+			sb.WriteString(bumpHeadings(t, 2))
 			if !strings.HasSuffix(t, "\n") {
 				sb.WriteString("\n")
 			}
@@ -158,17 +159,6 @@ func Slugify(title string) string {
 	return s
 }
 
-func shiftHeadings(text string, levels int) string {
-	lines := strings.Split(text, "\n")
-	extra := strings.Repeat("#", levels)
-	for i, line := range lines {
-		if strings.HasPrefix(line, "#") && (len(line) == 1 || line[1] == '#' || line[1] == ' ') {
-			lines[i] = extra + line
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 func renderToolBlock(part model.Part) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Tool:** `%s`", part.ToolName))
@@ -200,4 +190,40 @@ func truncate(s string, max int) string {
 func escapeTitle(t string) string {
 	// Remove leading # chars that would break Markdown heading levels
 	return strings.TrimLeft(t, "#")
+}
+
+// headingRe matches markdown headings (# through ######) at the start of a line,
+// but NOT inside fenced code blocks.
+var headingRe = regexp.MustCompile(`(?m)^(#{1,6})\s`)
+
+// bumpHeadings shifts all markdown headings in s down by delta levels so that
+// message body content nests properly under the ## role header.
+// Headings are capped at h6 (the markdown maximum).
+// Fenced code blocks (``` / ~~~) are skipped to avoid mangling code.
+func bumpHeadings(s string, delta int) string {
+	if delta <= 0 {
+		return s
+	}
+
+	lines := strings.Split(s, "\n")
+	inFence := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		lines[i] = headingRe.ReplaceAllStringFunc(line, func(m string) string {
+			hashes := strings.TrimRight(m, " \t")
+			newLevel := len(hashes) + delta
+			if newLevel > 6 {
+				newLevel = 6
+			}
+			return strings.Repeat("#", newLevel) + " "
+		})
+	}
+	return strings.Join(lines, "\n")
 }
