@@ -337,6 +337,18 @@ func (v StatsView) View() string {
 
 	var sb strings.Builder
 
+	// Unified header: section tabs + period selector on the same line
+	sectionLabels := []string{"Chart", "By Model", "By Agent"}
+	var secParts []string
+	for i, lbl := range sectionLabels {
+		if i == v.section {
+			secParts = append(secParts, activeSecStyle.Render(lbl))
+		} else {
+			secParts = append(secParts, normalStyle.Render(lbl))
+		}
+	}
+	header := strings.Join(secParts, "   ")
+
 	if v.section != statsSectionChart {
 		periods := []struct {
 			label string
@@ -356,20 +368,10 @@ func (v StatsView) View() string {
 				periodParts = append(periodParts, mutedStyle.Render(lbl))
 			}
 		}
-		sb.WriteString(strings.Join(periodParts, "  "))
-		sb.WriteString("\n")
+		header += "    " + strings.Join(periodParts, " ")
 	}
 
-	sectionLabels := []string{"Chart", "By Model", "By Agent"}
-	var secParts []string
-	for i, lbl := range sectionLabels {
-		if i == v.section {
-			secParts = append(secParts, activeSecStyle.Render(lbl))
-		} else {
-			secParts = append(secParts, normalStyle.Render(lbl))
-		}
-	}
-	sb.WriteString(strings.Join(secParts, "   "))
+	sb.WriteString(header)
 	sb.WriteString("\n")
 
 	if !v.loading {
@@ -567,6 +569,7 @@ func (v StatsView) View() string {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(v.theme.BorderFocused).
 			Width(v.width - 2).
+			Height(v.height - 2). // fill allocated height (minus border)
 			Render(content)
 	}
 	return content

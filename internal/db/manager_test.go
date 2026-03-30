@@ -126,71 +126,41 @@ func newInMemoryDB(t *testing.T) *sql.DB {
 	return memDB
 }
 
-func TestRunMigrations(t *testing.T) {
+func TestGetSetSetting(t *testing.T) {
 	memDB := newInMemoryDB(t)
 
-	// Insert a session_meta row with a note
-	_, err := memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, ?, ?)`,
-		"session-migrate-1", "my note", 1700000000)
+	// Missing key returns empty string
+	val, err := db.GetSetting(memDB, "nonexistent")
 	if err != nil {
-		t.Fatalf("insert session_meta: %v", err)
+		t.Fatalf("GetSetting missing: %v", err)
+	}
+	if val != "" {
+		t.Fatalf("expected empty string for missing key, got %q", val)
 	}
 
-	// Run migrations
-	if err := db.RunMigrations(memDB); err != nil {
-		t.Fatalf("RunMigrations: %v", err)
+	// Set a value
+	if err := db.SetSetting(memDB, "theme", "gruvbox"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
 	}
-
-	// Assert idea row was created
-	var count int
-	err = memDB.QueryRow(`SELECT COUNT(*) FROM idea WHERE source_session_id = ?`, "session-migrate-1").Scan(&count)
+	val, err = db.GetSetting(memDB, "theme")
 	if err != nil {
-		t.Fatalf("count ideas: %v", err)
+		t.Fatalf("GetSetting after set: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 idea, got %d", count)
+	if val != "gruvbox" {
+		t.Fatalf("expected 'gruvbox', got %q", val)
 	}
 
-	// Assert note was NULLed
-	var note *string
-	err = memDB.QueryRow(`SELECT note FROM session_meta WHERE session_id = ?`, "session-migrate-1").Scan(&note)
+	// Upsert overwrites
+	if err := db.SetSetting(memDB, "theme", "default"); err != nil {
+		t.Fatalf("SetSetting upsert: %v", err)
+	}
+	val, err = db.GetSetting(memDB, "theme")
 	if err != nil {
-		t.Fatalf("scan note: %v", err)
+		t.Fatalf("GetSetting after upsert: %v", err)
 	}
-	if note != nil {
-		t.Fatalf("expected note to be NULL, got %q", *note)
+	if val != "default" {
+		t.Fatalf("expected 'default', got %q", val)
 	}
-	t.Log("TestRunMigrations PASS")
-}
-
-func TestRunMigrationsIdempotent(t *testing.T) {
-	memDB := newInMemoryDB(t)
-
-	// Insert a session_meta row with a note
-	_, err := memDB.Exec(`INSERT INTO session_meta (session_id, note, time_updated) VALUES (?, ?, ?)`,
-		"session-migrate-2", "idempotent note", 1700000001)
-	if err != nil {
-		t.Fatalf("insert session_meta: %v", err)
-	}
-
-	// Run migrations twice
-	if err := db.RunMigrations(memDB); err != nil {
-		t.Fatalf("RunMigrations first: %v", err)
-	}
-	if err := db.RunMigrations(memDB); err != nil {
-		t.Fatalf("RunMigrations second: %v", err)
-	}
-
-	// Assert idea count = 1 (not doubled)
-	var count int
-	err = memDB.QueryRow(`SELECT COUNT(*) FROM idea WHERE source_session_id = ?`, "session-migrate-2").Scan(&count)
-	if err != nil {
-		t.Fatalf("count ideas: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 idea after idempotent run, got %d", count)
-	}
-	t.Log("TestRunMigrationsIdempotent PASS")
 }
 
 func TestDeleteTag(t *testing.T) {

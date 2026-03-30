@@ -70,7 +70,10 @@ func runManagerSchema(db *sql.DB) error {
 			name  TEXT PRIMARY KEY,
 			color TEXT NOT NULL DEFAULT '#7D56F4'
 		)`,
-		`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -491,83 +494,27 @@ func DeleteIdea(db *sql.DB, id string) error {
 	return tx.Commit()
 }
 
-// RunMigrations checks the schema_version table and runs any pending migrations.
-// It is idempotent: calling it multiple times is safe.
-func RunMigrations(db *sql.DB) error {
-	var currentVersion int
-	row := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`)
-	if err := row.Scan(&currentVersion); err != nil {
-		return fmt.Errorf("check schema version: %w", err)
+// GetSetting retrieves a value from the settings table. Returns "" if not found.
+func GetSetting(d *sql.DB, key string) (string, error) {
+	var value string
+	err := d.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
 	}
-
-	if currentVersion < 1 {
-		if err := migrateV1(db); err != nil {
-			return fmt.Errorf("migration v1: %w", err)
-		}
+	if err != nil {
+		return "", fmt.Errorf("get setting %q: %w", key, err)
 	}
-	return nil
+	return value, nil
 }
 
-func migrateV1(db *sql.DB) error {
-	tx, err := db.Begin()
+// SetSetting upserts a key-value pair in the settings table.
+func SetSetting(d *sql.DB, key, value string) error {
+	_, err := d.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	if err != nil {
-		return err
+		return fmt.Errorf("set setting %q: %w", key, err)
 	}
-	defer tx.Rollback()
-
-	// Fetch all sessions with non-empty notes
-	rows, err := tx.Query(`SELECT session_id, note, time_updated FROM session_meta WHERE note IS NOT NULL AND note != ''`)
-	if err != nil {
-		return fmt.Errorf("query notes: %w", err)
-	}
-
-	type noteRow struct {
-		sessionID   string
-		note        string
-		timeUpdated int64
-	}
-	var notes []noteRow
-	for rows.Next() {
-		var n noteRow
-		if err := rows.Scan(&n.sessionID, &n.note, &n.timeUpdated); err != nil {
-			rows.Close()
-			return err
-		}
-		notes = append(notes, n)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	now := time.Now().UnixMilli()
-	for _, n := range notes {
-		id := fmt.Sprintf("migrated_%s", n.sessionID)
-		ts := n.timeUpdated
-		if ts < 1e10 {
-			ts = ts * 1000 // convert seconds -> ms if needed
-		}
-		_, err = tx.Exec(`
-			INSERT INTO idea (id, content, source_session_id, time_created, time_updated)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO NOTHING
-		`, id, n.note, n.sessionID, ts, now)
-		if err != nil {
-			return fmt.Errorf("insert migrated idea: %w", err)
-		}
-		_, err = tx.Exec(`UPDATE session_meta SET note = NULL WHERE session_id = ?`, n.sessionID)
-		if err != nil {
-			return fmt.Errorf("null note: %w", err)
-		}
-	}
-
-	// Record migration as complete
-	_, err = tx.Exec(`INSERT INTO schema_version (version, applied_at) VALUES (1, ?)`, now)
-	if err != nil {
-		return fmt.Errorf("record migration v1: %w", err)
-	}
-
-	return tx.Commit()
+	return nil
 }
 
 func ListTagsWithSessionCounts(db *sql.DB) ([]model.Tag, map[string]int, error) {

@@ -166,8 +166,9 @@ type App struct {
 	totalCount    int
 	hideSubAgents bool
 
-	showHelp  bool
-	activeTab AppTab
+	showHelp    bool
+	showWelcome bool
+	activeTab   AppTab
 	theme     panes.Theme
 
 	autoPreview  bool
@@ -229,9 +230,13 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 		triliumParentNoteID: opts.TriliumParentNoteID,
 	}
 
-	// Run idempotent migrations (note → idea, etc.)
+	// First-launch: show welcome overlay with common commands
 	if managerDB != nil {
-		_ = db.RunMigrations(managerDB)
+		val, _ := db.GetSetting(managerDB, "onboarding_done")
+		if val == "" {
+			a.showWelcome = true
+			_ = db.SetSetting(managerDB, "onboarding_done", "1")
+		}
 	}
 
 	// Initialise panes with zero size; recalcLayout will size them on first WindowSizeMsg.
@@ -666,9 +671,9 @@ func (a App) View() string {
 		return a.viewConfirmCreateDir()
 	}
 
-	// Status bar line
+	// Status bar (2 lines)
 	statusBar := a.buildStatusBar()
-	contentHeight := a.height - 1
+	contentHeight := a.height - 2
 	if contentHeight < 0 {
 		contentHeight = 0
 	}
@@ -721,11 +726,13 @@ func (a App) View() string {
 		}
 	}
 
-	if a.showHelp {
-		mainView = a.overlayHelp(mainView)
-	}
-
 	full := lipgloss.JoinVertical(lipgloss.Left, mainView, statusBar)
+	if a.showWelcome {
+		full = a.overlayWelcome(full)
+	}
+	if a.showHelp {
+		full = a.overlayHelp(full)
+	}
 	if a.flash.text != "" {
 		full = a.overlayFlash(full)
 	}
@@ -751,6 +758,15 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 		a.showHelp = false
+		return a, nil
+	}
+
+	// Welcome overlay
+	if a.showWelcome {
+		if key == "ctrl+c" {
+			return a, tea.Quit
+		}
+		a.showWelcome = false
 		return a, nil
 	}
 
@@ -1225,7 +1241,7 @@ func (a *App) toggleIdeaConvView() tea.Cmd {
 // --- Layout ---
 
 func (a *App) recalcLayout() tea.Cmd {
-	h := a.height - 1 // reserve 1 line for status bar
+	h := a.height - 2 // reserve 2 lines for status bar
 	if h < 0 {
 		h = 0
 	}
@@ -1764,12 +1780,31 @@ func (a App) renderTabHeader(active AppTab) string {
 }
 
 func (a App) buildStatusBar() string {
-	statusStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted)
+	keyStyle := lipgloss.NewStyle().Foreground(a.theme.TextNormal)
+	descStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted)
 	errStyle := lipgloss.NewStyle().Foreground(a.theme.ErrorText)
 
+	// hk renders a "key desc" pair with key highlighted
+	hk := func(key, desc string) string {
+		return keyStyle.Render(key) + " " + descStyle.Render(desc)
+	}
+
+	// Line 2 (global) — always the same
+	line2Parts := []string{
+		hk("jk", "navigate"),
+		hk("[ ]", "tabs"),
+		hk("Tab", "focus"),
+		hk("/", "search"),
+		hk("?", "help"),
+		hk("q", "quit"),
+	}
+	line2 := strings.Join(line2Parts, "  ")
+
+	// --- Build line 1 (context-specific) ---
+
+	// Search mode: show search input on line 1
 	if a.searchMode {
-		var q string
-		var hint string
+		var q, hint string
 		switch a.activeTab {
 		case TabSessions:
 			q = a.searchQuery
@@ -1784,12 +1819,13 @@ func (a App) buildStatusBar() string {
 			q = a.statsSearchQuery
 			hint = "models/agents"
 		}
-		searchBar := fmt.Sprintf("Search: %s_  │  Filtering %s  │  [Esc] done", q, hint)
-		return statusStyle.Render(searchBar)
+		line1 := descStyle.Render(fmt.Sprintf("Search: %s_  │  Filtering %s  │  [Esc] done", q, hint))
+		return line1 + "\n" + line2
 	}
 
+	// Conversation search active
 	if a.focus == FocusConversation && (a.conversation.SearchMode() || a.conversation.SearchMatchCount() > 0) {
-		var parts []string
+		var line1 string
 		if a.conversation.SearchMode() {
 			matchInfo := ""
 			if a.conversation.SearchMatchCount() > 0 {
@@ -1797,15 +1833,16 @@ func (a App) buildStatusBar() string {
 			} else if a.conversation.SearchQuery() != "" {
 				matchInfo = " (no matches)"
 			}
-			parts = append(parts, fmt.Sprintf("/ %s_%s  │  [n/N] navigate  [Esc/Enter] close", a.conversation.SearchQuery(), matchInfo))
+			line1 = fmt.Sprintf("/ %s_%s  │  [n/N] navigate  [Esc/Enter] close", a.conversation.SearchQuery(), matchInfo)
 		} else {
-			parts = append(parts, fmt.Sprintf("[n/N] navigate  (%d/%d: %q)  │  [/] new search",
-				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery()))
+			line1 = fmt.Sprintf("[n/N] navigate  (%d/%d: %q)  │  [/] new search",
+				a.conversation.SearchMatchIdx()+1, a.conversation.SearchMatchCount(), a.conversation.SearchQuery())
 		}
-		parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
-		return statusStyle.Render(strings.Join(parts, "  │  "))
+		return descStyle.Render(line1) + "\n" + line2
 	}
 
+	// Active filter display
+	var filterLine string
 	switch a.activeTab {
 	case TabSessions:
 		var filterParts []string
@@ -1816,71 +1853,101 @@ func (a App) buildStatusBar() string {
 			filterParts = append(filterParts, fmt.Sprintf("Search: %s", a.searchQuery))
 		}
 		if len(filterParts) > 0 {
-			filterBar := strings.Join(filterParts, "  │  ") + "  │  [/] edit  [Esc] clear"
-			return statusStyle.Render(filterBar)
+			filterLine = strings.Join(filterParts, "  │  ") + "  │  [/] edit  [Esc] clear"
 		}
 	case TabIdeas:
 		if a.ideasSearchQuery != "" {
-			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.ideasSearchQuery)
-			return statusStyle.Render(filterBar)
+			filterLine = fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.ideasSearchQuery)
 		}
 	case TabTags:
 		if a.tagsSearchQuery != "" {
-			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.tagsSearchQuery)
-			return statusStyle.Render(filterBar)
+			filterLine = fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.tagsSearchQuery)
 		}
 	case TabStats:
 		if a.statsSearchQuery != "" {
-			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.statsSearchQuery)
-			return statusStyle.Render(filterBar)
+			filterLine = fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.statsSearchQuery)
 		}
-		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  [/] search")
+	}
+	if filterLine != "" {
+		return descStyle.Render(filterLine) + "\n" + line2
 	}
 
+	// Loading state
 	if a.loading && a.totalCount > 0 {
-		bar := statusStyle.Render(fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount))
+		line1 := fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount)
+		bar := descStyle.Render(line1)
 		if a.err != "" {
-			return bar + errStyle.Render("  ✗ "+a.err)
+			bar += errStyle.Render("  ✗ "+a.err)
 		}
-		return bar
+		return bar + "\n" + line2
 	}
 
-	var parts []string
-
-	switch a.focus {
-	case FocusSessionList:
-		switch a.activeTab {
-		case TabIdeas:
-			ideaHint := "[Tab] show session"
-			if a.ideaShowConv {
-				ideaHint = "[Tab] show idea"
-			}
-			parts = append(parts, "[↑↓/jk] navigate  [e] edit  [E] $EDITOR  [d] delete  [Enter] open ▸  [/] search  "+ideaHint+"  [[]]] switch tab")
-		case TabTags:
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] view sessions  [d] delete  [r] rename  [/] search  [Esc] clear")
-		default:
-			agentHint := "[A] show sub-agents"
-			if !a.hideSubAgents {
-				agentHint = "[A] hide sub-agents"
-			}
-			parts = append(parts, "[↑↓/jk] navigate  [Enter] open ▸  [ctrl+d/u] scroll preview  [i] idea  [t] tag  [/] search  [Esc] clear  "+agentHint)
+	// Normal context hints — build as key/desc pairs, truncate to fit width
+	// jk, /, Tab, [ ], ?, q are in line 2 — only show context-specific keys here
+	var hints []struct{ key, desc string }
+	hp := func(k, d string) struct{ key, desc string } { return struct{ key, desc string }{k, d} }
+	switch a.activeTab {
+	case TabStats:
+		hints = append(hints, hp("Tab", "section"), hp("s", "sort"))
+		if a.statsView.section != statsSectionChart {
+			hints = append([]struct{ key, desc string }{hp("1", "Today"), hp("7", "7d"), hp("3", "30d"), hp("0", "All")}, hints...)
 		}
-	case FocusConversation:
-		parts = append(parts, "[↑↓/jk] scroll  [ctrl+d/u] page  [g/G] top/bottom  [/] search  [Esc] back to list")
-	case FocusMetadata:
-		parts = append(parts, "[[] ideas  []] sessions  [T] tags")
+	default:
+		switch a.focus {
+		case FocusSessionList:
+			switch a.activeTab {
+			case TabIdeas:
+				ideaDesc := "show session"
+				if a.ideaShowConv {
+					ideaDesc = "show idea"
+				}
+				hints = append(hints, hp("Enter", "open"), hp("e", "edit"), hp("E", "$EDITOR"), hp("d", "delete"), hp("Tab", ideaDesc), hp("r", "refresh"))
+			case TabTags:
+				hints = append(hints, hp("Enter", "view sessions"), hp("d", "delete"), hp("r", "rename"))
+			default:
+				agentDesc := "show agents"
+				if !a.hideSubAgents {
+					agentDesc = "hide agents"
+				}
+				hints = append(hints, hp("Enter", "open"), hp("ctrl+d/u", "preview"), hp("i", "idea"), hp("t", "tag"), hp("r", "refresh"), hp("A", agentDesc))
+			}
+		case FocusConversation:
+			hints = append(hints, hp("ctrl+d/u", "page"), hp("g/G", "top/bottom"), hp("n/N", "match"), hp("Esc", "back"))
+		case FocusMetadata:
+			hints = append(hints, hp("Esc", "back"))
+		}
 	}
 
-	parts = append(parts, "[Tab] focus  [r] refresh  [?] help  [q] quit")
-
-	statusText := strings.Join(parts, "  │  ")
-	bar := statusStyle.Render(statusText)
-
+	line1 := truncateStyledHints(hints, a.width, hk)
 	if a.err != "" {
-		return bar + errStyle.Render("  ✗ "+a.err)
+		line1 += errStyle.Render("  ✗ "+a.err)
 	}
+	return line1 + "\n" + line2
+}
 
-	return bar
+// truncateStyledHints builds styled "key desc" pairs joined by "  ", dropping
+// hints from the end when the total visual width exceeds maxWidth.
+func truncateStyledHints(hints []struct{ key, desc string }, maxWidth int, hk func(string, string) string) string {
+	sep := "  "
+	sepW := len(sep)
+	for n := len(hints); n > 0; n-- {
+		totalW := 0
+		for i := 0; i < n; i++ {
+			// plain width: "key desc"
+			totalW += len(hints[i].key) + 1 + len(hints[i].desc)
+			if i > 0 {
+				totalW += sepW
+			}
+		}
+		if totalW <= maxWidth || n == 1 {
+			var parts []string
+			for i := 0; i < n; i++ {
+				parts = append(parts, hk(hints[i].key, hints[i].desc))
+			}
+			return strings.Join(parts, sep)
+		}
+	}
+	return ""
 }
 
 func (a App) overlayHelp(background string) string {
@@ -1930,6 +1997,72 @@ func (a App) overlayHelp(background string) string {
 		Render(lipgloss.NewStyle().Foreground(a.theme.TextMuted).Render(helpText))
 
 	_ = background // background string not layered — just show centered help
+	return lipgloss.Place(
+		a.width, a.height,
+		lipgloss.Center, lipgloss.Center,
+		box,
+	)
+}
+
+func (a App) overlayWelcome(background string) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(a.theme.Accent)
+	keyStyle := lipgloss.NewStyle().Foreground(a.theme.Accent).Bold(true)
+	sepStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted)
+	descStyle := lipgloss.NewStyle().Foreground(a.theme.TextNormal)
+	hintStyle := lipgloss.NewStyle().Foreground(a.theme.TextMuted).Italic(true)
+
+	type entry struct {
+		keys []string
+		desc string
+	}
+	entries := []entry{
+		{[]string{"j", "k"}, "Navigate list"},
+		{[]string{"Enter"}, "Open session"},
+		{[]string{"[", "]"}, "Switch tabs"},
+		{[]string{"Tab"}, "Cycle pane focus"},
+		{[]string{"/"}, "Search"},
+		{[]string{"?"}, "Full keybinding help"},
+		{[]string{"q"}, "Quit"},
+	}
+
+	// Build key columns and find max width for alignment
+	maxKeyW := 0
+	var keyColumns []string
+	for _, e := range entries {
+		var parts []string
+		for _, k := range e.keys {
+			parts = append(parts, keyStyle.Render(k))
+		}
+		col := strings.Join(parts, sepStyle.Render(" / "))
+		keyColumns = append(keyColumns, col)
+		if w := lipgloss.Width(col); w > maxKeyW {
+			maxKeyW = w
+		}
+	}
+
+	var rows []string
+	for i, e := range entries {
+		col := keyColumns[i]
+		pad := strings.Repeat(" ", maxKeyW-lipgloss.Width(col))
+		row := "  " + col + pad + "   " + descStyle.Render(e.desc)
+		rows = append(rows, row)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render("Welcome to mimir"),
+		"",
+		strings.Join(rows, "\n"),
+		"",
+		hintStyle.Render("Press any key to start"),
+	)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(a.theme.BorderFocused).
+		Padding(1, 3).
+		Render(content)
+
+	_ = background
 	return lipgloss.Place(
 		a.width, a.height,
 		lipgloss.Center, lipgloss.Center,

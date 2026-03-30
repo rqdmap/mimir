@@ -49,9 +49,8 @@ internal/
 
 - **NEVER** drop tables, truncate data, or run destructive DDL without explicit user request.
 - **NEVER** change `runManagerSchema()` in a way that could lose existing data. All schema changes must be **additive** (new tables, new columns with defaults).
-- **ALL** schema changes must go through the migration system (`RunMigrations` / `schema_version` table). Add a new `migrateVN` function; never modify existing migration functions.
-- **Before** any migration or schema change: describe what it does and ask for confirmation.
-- Migrations must be **idempotent** — running them multiple times must produce the same result (test this, see `TestRunMigrationsIdempotent`).
+- New tables can be added directly to `runManagerSchema()` using `CREATE TABLE IF NOT EXISTS`.
+- **Before** any schema change: describe what it does and ask for confirmation.
 - Use transactions (`tx.Begin` / `tx.Commit` / `defer tx.Rollback()`) for all multi-statement writes.
 
 ### 2. OpenCode DB is Read-Only
@@ -110,7 +109,7 @@ The TUI has **deeply interleaved state**. A change in one area frequently breaks
 
 | Package | Tests | What they cover |
 |---------|-------|-----------------|
-| `internal/db` | `manager_test.go` | Tag CRUD, idea CRUD, migrations, rename, delete, auto-cleanup |
+| `internal/db` | `manager_test.go` | Tag CRUD, idea CRUD, settings CRUD, rename, delete, auto-cleanup |
 | `internal/db` | `opencode_test.go` | Session/message loading from opencode.db |
 | `internal/tui` | `ideas_test.go` | IdeasView navigation, delete confirmation, edit |
 | `internal/tui/panes` | `conversation_test.go` | Rendering, tool output, truncation, session-ID guard, focus styling |
