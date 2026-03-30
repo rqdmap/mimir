@@ -188,7 +188,7 @@ func (m MetadataPane) View() string {
 	} else {
 		// You X   AI Y
 		turnsLine := fmt.Sprintf("You %-5d  AI %d", m.usage.UserTurns, m.usage.AITurns)
-		inputLine := fmt.Sprintf("Input   %8s", fmtTokens(m.usage.InputTokens))
+		inputLine := fmt.Sprintf("Input   %8s", fmtTokens(m.usage.InputTokens+m.usage.CacheRead+m.usage.CacheWrite))
 		outputLine := fmt.Sprintf("Output  %8s", fmtTokens(m.usage.OutputTokens))
 		var cacheLine string
 		if m.usage.CacheRead > 0 {

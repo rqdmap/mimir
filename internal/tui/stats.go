@@ -192,7 +192,7 @@ func (v *StatsView) resortModelStats() {
 		case 4:
 			return a.Requests > b.Requests
 		default:
-			return a.InputTokens > b.InputTokens
+			return (a.InputTokens + a.CacheRead + a.CacheWrite) > (b.InputTokens + b.CacheRead + b.CacheWrite)
 		}
 	})
 }
@@ -295,12 +295,12 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 		}
 	}
 
-	if input == 0 && v.userRequests == 0 {
+	total := input + cacheRead + cacheWrite
+	if total == 0 && v.userRequests == 0 {
 		return ""
 	}
 
 	var cachePercent float64
-	total := input + cacheRead + cacheWrite
 	if total > 0 {
 		cachePercent = float64(cacheRead) / float64(total) * 100
 	}
@@ -308,7 +308,7 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	sep := mutedStyle.Render("  │  ")
 	parts := []string{
 		normalStyle.Render("Reqs ") + accentStyle.Render(fmt.Sprintf("%d", v.userRequests)),
-		normalStyle.Render("In ") + accentStyle.Render(formatTokens(input)),
+		normalStyle.Render("In ") + accentStyle.Render(formatTokens(total)),
 		normalStyle.Render("Out ") + accentStyle.Render(formatTokens(output)),
 		normalStyle.Render("Cache ") + accentStyle.Render(fmt.Sprintf("%.0f%%", cachePercent)),
 	}
@@ -487,7 +487,7 @@ func (v StatsView) View() string {
 				line := fmt.Sprintf("%-*s  %-*s  %*s  %*s  %*.1f%%  %*d  %*d",
 					colModel, modelName,
 					colProvider, providerName,
-					colInput, formatTokens(stat.InputTokens),
+					colInput, formatTokens(stat.InputTokens+stat.CacheRead+stat.CacheWrite),
 					colOutput, formatTokens(stat.OutputTokens),
 					colCache-1, stat.CachePercent,
 					colTurns, stat.Turns,
