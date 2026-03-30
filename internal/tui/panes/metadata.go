@@ -22,6 +22,8 @@ type MetadataPane struct {
 	ideaMode     bool
 	selectedIdea *model.Idea
 	theme        Theme
+	usage        model.SessionUsage
+	hasUsage     bool
 }
 
 func NewMetadataPane(width, height int, theme Theme) MetadataPane {
@@ -55,6 +57,11 @@ func (m *MetadataPane) SetMessageCount(n int) {
 	m.messageCount = n
 }
 
+func (m *MetadataPane) SetUsage(u model.SessionUsage) {
+	m.usage = u
+	m.hasUsage = true
+}
+
 func (m *MetadataPane) SetFocused(focused bool) {
 	m.focused = focused
 }
@@ -68,12 +75,25 @@ func (m *MetadataPane) ClearSession() {
 	m.hasSession = false
 	m.meta = model.SessionMeta{}
 	m.messageCount = 0
+	m.usage = model.SessionUsage{}
+	m.hasUsage = false
 }
 
 func (m MetadataPane) Init() tea.Cmd { return nil }
 
 func (m MetadataPane) Update(msg tea.Msg) (MetadataPane, tea.Cmd) {
 	return m, nil
+}
+
+func fmtTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%dK", n/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func (m MetadataPane) View() string {
@@ -158,6 +178,43 @@ func (m MetadataPane) View() string {
 	statsHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Stats ───")
 	statsView := fmt.Sprintf("Messages: %d", m.messageCount)
 
+	// Usage section
+	usageHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Usage ───")
+	var usageBody string
+	if !m.hasSession {
+		// skip — no session selected
+	} else if !m.hasUsage {
+		usageBody = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Italic(true).Render("Loading...")
+	} else {
+		// You X   AI Y
+		turnsLine := fmt.Sprintf("You %-5d  AI %d", m.usage.UserTurns, m.usage.AITurns)
+		inputLine := fmt.Sprintf("Input   %8s", fmtTokens(m.usage.InputTokens))
+		outputLine := fmt.Sprintf("Output  %8s", fmtTokens(m.usage.OutputTokens))
+		var cacheLine string
+		if m.usage.CacheRead > 0 {
+			cacheLine = fmt.Sprintf("Cache   %8s  %.0f%%", fmtTokens(m.usage.CacheRead), m.usage.CachePercent)
+		} else {
+			cacheLine = fmt.Sprintf("Cache   %8s", fmtTokens(m.usage.CacheRead))
+		}
+		usageBody = strings.Join([]string{turnsLine, inputLine, outputLine, cacheLine}, "\n")
+	}
+
+	// Models section (only when hasUsage and models non-empty)
+	var modelsSection string
+	if m.hasSession && m.hasUsage && len(m.usage.Models) > 0 {
+		modelsHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Models ───")
+		var modelLines []string
+		maxShow := 3
+		for i, mdl := range m.usage.Models {
+			if i >= maxShow {
+				modelLines = append(modelLines, lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(fmt.Sprintf("+%d more", len(m.usage.Models)-maxShow)))
+				break
+			}
+			modelLines = append(modelLines, lipgloss.NewStyle().Foreground(m.theme.TextNormal).Render(mdl))
+		}
+		modelsSection = "\n" + modelsHeader + "\n" + strings.Join(modelLines, "\n")
+	}
+
 	// Combine
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		"\n",
@@ -170,6 +227,10 @@ func (m MetadataPane) View() string {
 		"\n",
 		statsHeader,
 		statsView,
+		"\n",
+		usageHeader,
+		usageBody,
+		modelsSection,
 	)
 
 	return style.Render(lipgloss.JoinVertical(lipgloss.Center, title, content))

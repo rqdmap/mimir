@@ -10,6 +10,7 @@ var validTabNames = map[string]bool{
 	"sessions": true,
 	"ideas":    true,
 	"tags":     true,
+	"stats":    true,
 }
 
 var DefaultTabOrder = []string{"ideas", "sessions", "tags"}
@@ -21,13 +22,13 @@ type LayoutConfig struct {
 }
 
 type Config struct {
-	AutoPreview bool         `json:"auto_preview"`
-	Theme       string       `json:"theme"`
-	Layout      LayoutConfig `json:"layout"`
-	ExportDir   string       `json:"export_dir"` // directory for exported markdown files; defaults to cwd
-	TriliumURL      string `json:"trilium_url"`           // e.g. "http://localhost:8080"
-	TriliumToken    string `json:"trilium_token"`         // ETAPI auth token
-	TriliumParentNoteID string `json:"trilium_parent_note_id"` // parent note; defaults to "root"
+	AutoPreview         bool         `json:"auto_preview"`
+	Theme               string       `json:"theme"`
+	Layout              LayoutConfig `json:"layout"`
+	ExportDir           string       `json:"export_dir"`             // directory for exported markdown files; defaults to cwd
+	TriliumURL          string       `json:"trilium_url"`            // e.g. "http://localhost:8080"
+	TriliumToken        string       `json:"trilium_token"`          // ETAPI auth token
+	TriliumParentNoteID string       `json:"trilium_parent_note_id"` // parent note; defaults to "root"
 }
 
 func defaultConfig() Config {

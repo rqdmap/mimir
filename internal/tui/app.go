@@ -34,6 +34,7 @@ const (
 	TabSessions AppTab = iota
 	TabIdeas
 	TabTags
+	TabStats
 )
 
 // --- Async message types ---
@@ -84,6 +85,18 @@ type sessionsBatchLoadedMsg struct {
 	done        bool
 }
 
+type statsDataLoadedMsg struct {
+	period model.StatsPeriod
+	models []model.ModelStat
+	agents []model.AgentStat
+	daily  []model.DailyPoint
+}
+
+type sessionUsageLoadedMsg struct {
+	sessionID string
+	usage     model.SessionUsage
+}
+
 type Options struct {
 	AutoPreview         bool
 	Ratio               [3]int
@@ -105,6 +118,7 @@ type App struct {
 	conversation panes.ConversationPane
 	metadata     panes.MetadataPane
 	ideasView    IdeasView
+	statsView    StatsView
 
 	opencodeDB *sql.DB
 	managerDB  *sql.DB
@@ -149,6 +163,8 @@ func tabNameToAppTab(name string) AppTab {
 		return TabSessions
 	case "tags":
 		return TabTags
+	case "stats":
+		return TabStats
 	default:
 		return TabIdeas
 	}
@@ -206,6 +222,7 @@ func NewApp(opencodeDB, managerDB *sql.DB, theme panes.Theme, opts Options) App 
 	a.ideasView = NewIdeasView(0, 0, theme)
 	a.inputMode = NewInputMode(0, 0, theme)
 	a.tagsView = NewTagsView(0, 0, theme)
+	a.statsView = newStatsView(theme)
 	a.exportOverlay = NewExportOverlay(0, 0, theme, opts.TriliumURL != "" && opts.TriliumToken != "")
 
 	a.sessionList.SetFocused(true)
@@ -309,6 +326,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = ""
 		if a.managerDB != nil && msg.meta.SessionID != "" {
 			cmds = append(cmds, a.reloadSessionIdeas(msg.meta.SessionID))
+		}
+		if a.opencodeDB != nil && msg.meta.SessionID != "" {
+			cmds = append(cmds, a.loadSessionUsageCmd(msg.meta.SessionID))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -559,6 +579,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.flash = flashMsg{}
 		return a, nil
 
+	case statsDataLoadedMsg:
+		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily)
+		return a, nil
+
+	case sessionUsageLoadedMsg:
+		if a.selectedSession != nil && msg.sessionID == a.selectedSession.ID {
+			a.metadata.SetUsage(msg.usage)
+		}
+		return a, nil
+
 	}
 
 	if a.activeTab == TabIdeas {
@@ -619,6 +649,16 @@ func (a App) View() string {
 		leftPane = lipgloss.JoinVertical(lipgloss.Left, tabHeader, a.ideasView.View())
 	case TabTags:
 		leftPane = lipgloss.JoinVertical(lipgloss.Left, tabHeader, a.tagsView.View())
+	case TabStats:
+		statsContent := a.statsView.View()
+		full := lipgloss.JoinVertical(lipgloss.Left, a.renderTabHeader(TabStats), statsContent, statusBar)
+		if a.showHelp {
+			full = a.overlayHelp(full)
+		}
+		if a.flash.text != "" {
+			full = a.overlayFlash(full)
+		}
+		return full
 	}
 
 	var mainView string
@@ -824,6 +864,14 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.setFocus(FocusSessionList)
 		return a, nil
 
+	case "S":
+		a.activeTab = TabStats
+		a.setFocus(FocusSessionList)
+		if a.statsView.loading {
+			return a, a.loadStatsDataCmd(a.statsView.period)
+		}
+		return a, nil
+
 	case "A":
 		a.hideSubAgents = !a.hideSubAgents
 		a.applyFilters()
@@ -840,12 +888,38 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.activeTab == TabIdeas {
 			return a, a.toggleIdeaConvView()
 		}
+		if a.activeTab == TabStats {
+			var cmd tea.Cmd
+			a.statsView, cmd = a.statsView.handleKey(msg)
+			return a, cmd
+		}
 		a.cycleFocusForward()
 		return a, nil
 
 	case "shift+tab":
 		a.cycleFocusBackward()
 		return a, nil
+	}
+
+	if a.activeTab == TabStats {
+		switch key {
+		case "1":
+			a.statsView.loading = true
+			return a, a.loadStatsDataCmd(model.PeriodToday)
+		case "7":
+			a.statsView.loading = true
+			return a, a.loadStatsDataCmd(model.Period7d)
+		case "3":
+			a.statsView.loading = true
+			return a, a.loadStatsDataCmd(model.Period30d)
+		case "0":
+			a.statsView.loading = true
+			return a, a.loadStatsDataCmd(model.PeriodAll)
+		default:
+			var cmd tea.Cmd
+			a.statsView, cmd = a.statsView.handleKey(msg)
+			return a, cmd
+		}
 	}
 
 	if key == "t" {
@@ -1028,6 +1102,12 @@ func (a *App) onTabSwitch() tea.Cmd {
 		a.metadata.ClearIdea()
 		return nil
 	}
+	if a.activeTab == TabStats {
+		if a.statsView.loading {
+			return a.loadStatsDataCmd(a.statsView.period)
+		}
+		return nil
+	}
 	a.ideaShowConv = false
 	a.conversation.ClearIdeaContent()
 	a.metadata.ClearIdea()
@@ -1108,6 +1188,12 @@ func (a *App) recalcLayout() tea.Cmd {
 	a.inputMode.height = a.height
 	a.exportOverlay.SetSize(a.width, a.height)
 	a.tagsView.SetSize(listW, h-1)
+
+	contentW := a.width
+	if contentW < 4 {
+		contentW = 4
+	}
+	a.statsView.SetSize(contentW, h)
 	return tea.Batch(cmds...)
 }
 
@@ -1291,6 +1377,28 @@ func (a App) loadTagsWithCounts() tea.Cmd {
 			return errMsg{err: err.Error()}
 		}
 		return tagsLoadedMsg{tags: tags, counts: counts}
+	}
+}
+
+func (a App) loadStatsDataCmd(period model.StatsPeriod) tea.Cmd {
+	ocDB := a.opencodeDB
+	return func() tea.Msg {
+		since := sinceMs(period)
+		models, _ := db.GetUsageByModel(ocDB, since)
+		agents, _ := db.GetUsageByAgent(ocDB, since)
+		daily, _ := db.GetDailyUsage(ocDB, since)
+		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily}
+	}
+}
+
+func (a App) loadSessionUsageCmd(sessionID string) tea.Cmd {
+	ocDB := a.opencodeDB
+	return func() tea.Msg {
+		if ocDB == nil {
+			return nil
+		}
+		usage, _ := db.GetSessionUsage(ocDB, sessionID)
+		return sessionUsageLoadedMsg{sessionID: sessionID, usage: usage}
 	}
 }
 
@@ -1519,6 +1627,7 @@ func (a App) renderTabHeader(active AppTab) string {
 		TabSessions: "Sessions",
 		TabIdeas:    "Ideas",
 		TabTags:     "Tags",
+		TabStats:    "Stats",
 	}
 	var parts []string
 	for _, name := range a.tabOrder {
@@ -1596,6 +1705,8 @@ func (a App) buildStatusBar() string {
 			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.tagsSearchQuery)
 			return statusStyle.Render(filterBar)
 		}
+	case TabStats:
+		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  m: metric  S: stats tab")
 	}
 
 	if a.loading && a.totalCount > 0 {

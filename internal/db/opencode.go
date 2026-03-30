@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -411,4 +412,203 @@ func ListProjects(db *sql.DB) ([]model.Project, error) {
 		return nil, fmt.Errorf("project rows error: %w", err)
 	}
 	return projects, nil
+}
+
+// GetUsageByModel returns token usage aggregated by model, optionally filtered
+// by a Unix millisecond timestamp (since). Pass since=0 to return all data.
+func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
+	query := `
+		SELECT
+			JSON_EXTRACT(data, '$.modelID')    AS modelID,
+			JSON_EXTRACT(data, '$.providerID') AS providerID,
+			COUNT(*)                           AS turns,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cacheRead
+		FROM message
+		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
+		  AND JSON_EXTRACT(data, '$.modelID') IS NOT NULL`
+	args := []interface{}{}
+	if since > 0 {
+		query += `
+		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	query += `
+		GROUP BY JSON_EXTRACT(data, '$.modelID'), JSON_EXTRACT(data, '$.providerID')
+		ORDER BY inputTokens DESC`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query usage by model: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.ModelStat
+	for rows.Next() {
+		var s model.ModelStat
+		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.InputTokens, &s.OutputTokens, &s.CacheRead); err != nil {
+			return nil, fmt.Errorf("scan model stat: %w", err)
+		}
+		total := s.InputTokens + s.CacheRead
+		if total > 0 {
+			s.CachePercent = float64(s.CacheRead) / float64(total) * 100.0
+		}
+		results = append(results, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error (usage by model): %w", err)
+	}
+	return results, nil
+}
+
+// GetUsageByAgent returns token usage aggregated by agent name, optionally
+// filtered by a Unix millisecond timestamp (since). Pass since=0 for all data.
+func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
+	query := `
+		SELECT
+			LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) AS agent,
+			COUNT(*)                                                  AS turns,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')  AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output') AS INTEGER)), 0) AS outputTokens
+		FROM message
+		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
+		  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) != ''`
+	args := []interface{}{}
+	if since > 0 {
+		query += `
+		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	query += `
+		GROUP BY LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), '')))
+		ORDER BY inputTokens DESC`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query usage by agent: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.AgentStat
+	for rows.Next() {
+		var s model.AgentStat
+		if err := rows.Scan(&s.Agent, &s.Turns, &s.InputTokens, &s.OutputTokens); err != nil {
+			return nil, fmt.Errorf("scan agent stat: %w", err)
+		}
+		results = append(results, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error (usage by agent): %w", err)
+	}
+	return results, nil
+}
+
+// GetDailyUsage returns token usage aggregated by calendar day (local time),
+// ordered chronologically. Pass since=0 for all data.
+func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
+	query := `
+		SELECT
+			date(CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
+			COUNT(*)                                                                                    AS turns,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cacheRead
+		FROM message
+		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'`
+	args := []interface{}{}
+	if since > 0 {
+		query += `
+		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	query += `
+		GROUP BY day
+		ORDER BY day ASC`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query daily usage: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.DailyPoint
+	for rows.Next() {
+		var dayStr sql.NullString
+		var dp model.DailyPoint
+		if err := rows.Scan(&dayStr, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead); err != nil {
+			return nil, fmt.Errorf("scan daily point: %w", err)
+		}
+		if !dayStr.Valid || dayStr.String == "" {
+			continue
+		}
+		t, err := time.Parse("2006-01-02", dayStr.String)
+		if err != nil {
+			continue
+		}
+		dp.Date = t
+		results = append(results, dp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error (daily usage): %w", err)
+	}
+	return results, nil
+}
+
+// GetSessionUsage returns a complete token usage summary for a single session.
+func GetSessionUsage(db *sql.DB, sessionID string) (model.SessionUsage, error) {
+	var su model.SessionUsage
+
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM message WHERE session_id=? AND JSON_EXTRACT(data,'$.role')='user'`,
+		sessionID,
+	).Scan(&su.UserTurns); err != nil {
+		return model.SessionUsage{}, fmt.Errorf("query user turns: %w", err)
+	}
+
+	if err := db.QueryRow(
+		`SELECT COUNT(*),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.input')      AS INTEGER)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.output')     AS INTEGER)), 0),
+			COALESCE(SUM(CAST(JSON_EXTRACT(data,'$.tokens.cache.read') AS INTEGER)), 0)
+		FROM message
+		WHERE session_id=? AND JSON_EXTRACT(data,'$.role')='assistant'`,
+		sessionID,
+	).Scan(&su.AITurns, &su.InputTokens, &su.OutputTokens, &su.CacheRead); err != nil {
+		return model.SessionUsage{}, fmt.Errorf("query ai turns: %w", err)
+	}
+
+	total := su.InputTokens + su.CacheRead
+	if total > 0 {
+		su.CachePercent = float64(su.CacheRead) / float64(total) * 100.0
+	}
+
+	rows, err := db.Query(
+		`SELECT JSON_EXTRACT(data,'$.modelID'), COUNT(*) AS cnt
+		FROM message
+		WHERE session_id=?
+		  AND JSON_EXTRACT(data,'$.role')='assistant'
+		  AND JSON_EXTRACT(data,'$.modelID') IS NOT NULL
+		GROUP BY JSON_EXTRACT(data,'$.modelID')
+		ORDER BY cnt DESC`,
+		sessionID,
+	)
+	if err != nil {
+		return model.SessionUsage{}, fmt.Errorf("query session models: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var modelID string
+		var cnt int
+		if err := rows.Scan(&modelID, &cnt); err != nil {
+			return model.SessionUsage{}, fmt.Errorf("scan session model: %w", err)
+		}
+		su.Models = append(su.Models, modelID)
+	}
+	if err := rows.Err(); err != nil {
+		return model.SessionUsage{}, fmt.Errorf("rows error (session models): %w", err)
+	}
+
+	return su, nil
 }
