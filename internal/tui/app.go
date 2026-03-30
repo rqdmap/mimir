@@ -158,6 +158,7 @@ type App struct {
 
 	ideasSearchQuery string
 	tagsSearchQuery  string
+	statsSearchQuery string
 	activeTagFilter  string
 
 	loading       bool
@@ -808,6 +809,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.ideasSearchQuery += pastedText
 			case TabTags:
 				a.tagsSearchQuery += pastedText
+			case TabStats:
+				a.statsSearchQuery += pastedText
 			}
 			a.applyFilters()
 			return a, nil
@@ -834,6 +837,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					runes := []rune(a.tagsSearchQuery)
 					a.tagsSearchQuery = string(runes[:len(runes)-1])
 				}
+			case TabStats:
+				if len([]rune(a.statsSearchQuery)) > 0 {
+					runes := []rune(a.statsSearchQuery)
+					a.statsSearchQuery = string(runes[:len(runes)-1])
+				}
 			}
 		default:
 			if msg.Type == tea.KeyRunes {
@@ -844,6 +852,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.ideasSearchQuery += string(msg.Runes)
 				case TabTags:
 					a.tagsSearchQuery += string(msg.Runes)
+				case TabStats:
+					a.statsSearchQuery += string(msg.Runes)
 				}
 			}
 		}
@@ -875,6 +885,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, cmd
 			}
 			a.tagsSearchQuery = ""
+		case TabStats:
+			a.statsSearchQuery = ""
 		}
 		a.applyFilters()
 		return a, nil
@@ -1594,6 +1606,7 @@ func (a *App) applyFilters() {
 	a.ideasView.SetFilter(a.ideasSearchQuery)
 	a.tagsView.SetFilter(a.tagsSearchQuery)
 	a.tagsView.SetSessions(a.sessions, a.sessionTags)
+	a.statsView.SetFilter(a.statsSearchQuery)
 }
 
 func (a *App) tryAutoLoadSelected() tea.Cmd {
@@ -1767,6 +1780,9 @@ func (a App) buildStatusBar() string {
 		case TabTags:
 			q = a.tagsSearchQuery
 			hint = "tags"
+		case TabStats:
+			q = a.statsSearchQuery
+			hint = "models/agents"
 		}
 		searchBar := fmt.Sprintf("Search: %s_  │  Filtering %s  │  [Esc] done", q, hint)
 		return statusStyle.Render(searchBar)
@@ -1814,7 +1830,11 @@ func (a App) buildStatusBar() string {
 			return statusStyle.Render(filterBar)
 		}
 	case TabStats:
-		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  ←/→: chart scroll  S: stats tab")
+		if a.statsSearchQuery != "" {
+			filterBar := fmt.Sprintf("Filter: %s  │  [/] edit  [Esc] clear", a.statsSearchQuery)
+			return statusStyle.Render(filterBar)
+		}
+		return statusStyle.Render("[1] Today  [7] 7d  [3] 30d  [0] All  │  Tab: section  j/k: scroll  s: sort  [/] search")
 	}
 
 	if a.loading && a.totalCount > 0 {

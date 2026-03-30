@@ -23,24 +23,27 @@ const (
 )
 
 type StatsView struct {
-	period       model.StatsPeriod
-	modelStats   []model.ModelStat
-	agentStats   []model.AgentStat
-	dailyPoints  []model.DailyPoint
-	userRequests int
-	loading      bool
-	section      int
-	modelCursor  int
-	agentCursor  int
-	modelOffset  int
-	agentOffset  int
-	modelSortCol int
-	chartContext tslc.Model
-	chartOutput  tslc.Model
-	chartTurns   tslc.Model
-	width        int
-	height       int
-	theme        panes.Theme
+	period         model.StatsPeriod
+	modelStats     []model.ModelStat
+	agentStats     []model.AgentStat
+	filteredModels []model.ModelStat
+	filteredAgents []model.AgentStat
+	filterQuery    string
+	dailyPoints    []model.DailyPoint
+	userRequests   int
+	loading        bool
+	section        int
+	modelCursor    int
+	agentCursor    int
+	modelOffset    int
+	agentOffset    int
+	modelSortCol   int
+	chartContext   tslc.Model
+	chartOutput    tslc.Model
+	chartTurns     tslc.Model
+	width          int
+	height         int
+	theme          panes.Theme
 }
 
 func newStatsView(theme panes.Theme) StatsView {
@@ -90,15 +93,45 @@ func (v *StatsView) SetData(period model.StatsPeriod, modelStats []model.ModelSt
 	v.userRequests = userRequests
 	v.loading = false
 
-	if v.modelCursor >= len(v.modelStats) {
-		v.modelCursor = 0
-	}
-	if v.agentCursor >= len(v.agentStats) {
-		v.agentCursor = 0
-	}
-
-	v.resortModelStats()
+	v.applyFilter()
 	v.buildCharts(daily)
+}
+
+func (v *StatsView) SetFilter(query string) {
+	v.filterQuery = query
+	v.applyFilter()
+}
+
+func (v *StatsView) applyFilter() {
+	q := strings.ToLower(v.filterQuery)
+	if q == "" {
+		v.filteredModels = make([]model.ModelStat, len(v.modelStats))
+		copy(v.filteredModels, v.modelStats)
+		v.filteredAgents = make([]model.AgentStat, len(v.agentStats))
+		copy(v.filteredAgents, v.agentStats)
+	} else {
+		v.filteredModels = nil
+		for _, s := range v.modelStats {
+			if strings.Contains(strings.ToLower(s.ModelID), q) || strings.Contains(strings.ToLower(s.ProviderID), q) {
+				v.filteredModels = append(v.filteredModels, s)
+			}
+		}
+		v.filteredAgents = nil
+		for _, s := range v.agentStats {
+			if strings.Contains(strings.ToLower(s.Agent), q) {
+				v.filteredAgents = append(v.filteredAgents, s)
+			}
+		}
+	}
+	if v.modelCursor >= len(v.filteredModels) {
+		v.modelCursor = 0
+		v.modelOffset = 0
+	}
+	if v.agentCursor >= len(v.filteredAgents) {
+		v.agentCursor = 0
+		v.agentOffset = 0
+	}
+	v.resortModelStats()
 }
 
 func (v *StatsView) buildCharts(daily []model.DailyPoint) {
@@ -147,8 +180,8 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 }
 
 func (v *StatsView) resortModelStats() {
-	sort.SliceStable(v.modelStats, func(i, j int) bool {
-		a, b := v.modelStats[i], v.modelStats[j]
+	sort.SliceStable(v.filteredModels, func(i, j int) bool {
+		a, b := v.filteredModels[i], v.filteredModels[j]
 		switch v.modelSortCol {
 		case 1:
 			return a.OutputTokens > b.OutputTokens
@@ -195,9 +228,9 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 	case "shift+tab":
 		v.section = (v.section - 1 + statsSectionCount) % statsSectionCount
 	case "j", "down":
-		if v.section == statsSectionModel && v.modelCursor < len(v.modelStats)-1 {
+		if v.section == statsSectionModel && v.modelCursor < len(v.filteredModels)-1 {
 			v.modelCursor++
-		} else if v.section == statsSectionAgent && v.agentCursor < len(v.agentStats)-1 {
+		} else if v.section == statsSectionAgent && v.agentCursor < len(v.filteredAgents)-1 {
 			v.agentCursor++
 		}
 		v.clampOffsets()
@@ -211,9 +244,9 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 	case "ctrl+f", "ctrl+d":
 		pageH := v.listPageHeight()
 		if v.section == statsSectionModel {
-			v.modelCursor = min(v.modelCursor+pageH, len(v.modelStats)-1)
+			v.modelCursor = min(v.modelCursor+pageH, len(v.filteredModels)-1)
 		} else if v.section == statsSectionAgent {
-			v.agentCursor = min(v.agentCursor+pageH, len(v.agentStats)-1)
+			v.agentCursor = min(v.agentCursor+pageH, len(v.filteredAgents)-1)
 		}
 		v.clampOffsets()
 	case "ctrl+b", "ctrl+u":
@@ -234,9 +267,9 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 		}
 	case "G":
 		if v.section == statsSectionModel {
-			v.modelCursor = len(v.modelStats) - 1
+			v.modelCursor = len(v.filteredModels) - 1
 		} else if v.section == statsSectionAgent {
-			v.agentCursor = len(v.agentStats) - 1
+			v.agentCursor = len(v.filteredAgents) - 1
 		}
 		v.clampOffsets()
 	case "s":
@@ -252,7 +285,7 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	var input, output, cacheRead, cacheWrite int64
 	topModel := ""
 
-	for i, s := range v.modelStats {
+	for i, s := range v.filteredModels {
 		input += s.InputTokens
 		output += s.OutputTokens
 		cacheRead += s.CacheRead
@@ -396,7 +429,7 @@ func (v StatsView) View() string {
 		}
 
 	case statsSectionModel:
-		if len(v.modelStats) == 0 {
+		if len(v.filteredModels) == 0 {
 			sb.WriteString(mutedStyle.Render("No data for this period."))
 			sb.WriteString("\n")
 		} else {
@@ -433,7 +466,7 @@ func (v StatsView) View() string {
 			sb.WriteString(headerStyle.Render(headerLine))
 			sb.WriteString("\n")
 
-			for i, stat := range v.modelStats {
+			for i, stat := range v.filteredModels {
 				if i < v.modelOffset {
 					continue
 				}
@@ -471,7 +504,7 @@ func (v StatsView) View() string {
 		}
 
 	case statsSectionAgent:
-		if len(v.agentStats) == 0 {
+		if len(v.filteredAgents) == 0 {
 			sb.WriteString(mutedStyle.Render("No data for this period."))
 			sb.WriteString("\n")
 		} else {
@@ -497,7 +530,7 @@ func (v StatsView) View() string {
 			sb.WriteString(headerStyle.Render(headerLine))
 			sb.WriteString("\n")
 
-			for i, stat := range v.agentStats {
+			for i, stat := range v.filteredAgents {
 				if i < v.agentOffset {
 					continue
 				}
