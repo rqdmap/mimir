@@ -333,24 +333,13 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 		}
 		v.clampOffsets()
 	case "0":
-		if v.section == statsSectionModel {
-			v.modelCursor = 0
-			v.modelOffset = 0
-		} else if v.section == statsSectionAgent {
-			v.agentCursor = 0
-			v.agentOffset = 0
-		} else if v.section == statsSectionChart && len(v.sortedPoints) > 0 {
+		if v.section == statsSectionChart && len(v.sortedPoints) > 0 {
 			v.chartCursor = 0
 		}
 	case "$":
-		if v.section == statsSectionModel {
-			v.modelCursor = len(v.filteredModels) - 1
-		} else if v.section == statsSectionAgent {
-			v.agentCursor = len(v.filteredAgents) - 1
-		} else if v.section == statsSectionChart && len(v.sortedPoints) > 0 {
+		if v.section == statsSectionChart && len(v.sortedPoints) > 0 {
 			v.chartCursor = len(v.sortedPoints) - 1
 		}
-		v.clampOffsets()
 	case "s":
 		if v.section == statsSectionModel {
 			v.modelSortCol = (v.modelSortCol + 1) % 5
@@ -377,8 +366,15 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	}
 
 	total := input + cacheRead + cacheWrite
-	if total == 0 && requests == 0 {
+	if total == 0 && requests == 0 && v.filterQuery == "" {
 		return ""
+	}
+
+	sep := mutedStyle.Render("  │  ")
+	filterStyle := mutedStyle.Italic(true)
+
+	if total == 0 && requests == 0 {
+		return filterStyle.Render(`"` + v.filterQuery + `"`)
 	}
 
 	var cachePercent float64
@@ -386,7 +382,6 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 		cachePercent = float64(cacheRead) / float64(total) * 100
 	}
 
-	sep := mutedStyle.Render("  │  ")
 	parts := []string{
 		normalStyle.Render("Reqs ") + accentStyle.Render(fmt.Sprintf("%d", requests)),
 		normalStyle.Render("In ") + accentStyle.Render(formatTokens(total)),
@@ -399,6 +394,9 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 			topModel = string(runes[:27]) + "…"
 		}
 		parts = append(parts, normalStyle.Render("Top ")+accentStyle.Render(topModel))
+	}
+	if v.filterQuery != "" {
+		parts = append(parts, filterStyle.Render(`"`+v.filterQuery+`"`))
 	}
 	return strings.Join(parts, sep)
 }
