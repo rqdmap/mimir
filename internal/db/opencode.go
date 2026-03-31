@@ -559,6 +559,59 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 	return results, nil
 }
 
+func GetDailyUsageByModel(db *sql.DB, since int64) ([]model.ModelDailyPoint, error) {
+	query := `
+		SELECT
+			date(CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
+			COALESCE(JSON_EXTRACT(data, '$.modelID'),    '') AS model_id,
+			COALESCE(JSON_EXTRACT(data, '$.providerID'), '') AS provider_id,
+			COUNT(*)                                                                                    AS turns,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')       AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')      AS INTEGER)), 0) AS outputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
+		FROM message
+		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
+		  AND JSON_EXTRACT(data, '$.modelID') IS NOT NULL`
+	args := []interface{}{}
+	if since > 0 {
+		query += `
+		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	query += `
+		GROUP BY day, model_id, provider_id
+		ORDER BY day ASC`
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query daily usage by model: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.ModelDailyPoint
+	for rows.Next() {
+		var dayStr sql.NullString
+		var dp model.ModelDailyPoint
+		if err := rows.Scan(&dayStr, &dp.ModelID, &dp.ProviderID, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead, &dp.CacheWrite); err != nil {
+			return nil, fmt.Errorf("scan model daily point: %w", err)
+		}
+		if !dayStr.Valid || dayStr.String == "" {
+			continue
+		}
+		t, err := time.Parse("2006-01-02", dayStr.String)
+		if err != nil {
+			continue
+		}
+		dp.Date = t
+		results = append(results, dp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error (daily usage by model): %w", err)
+	}
+	return results, nil
+}
+
 func GetUserRequestCount(db *sql.DB, since int64) (int, error) {
 	query := `SELECT COUNT(*) FROM message WHERE JSON_EXTRACT(data, '$.role') = 'user'`
 	args := []interface{}{}

@@ -34,6 +34,18 @@ type DailyPoint struct {
 	CacheWrite   int64
 }
 
+// ModelDailyPoint represents token usage for a specific model on a single day.
+type ModelDailyPoint struct {
+	Date         time.Time
+	ModelID      string
+	ProviderID   string
+	Turns        int
+	InputTokens  int64
+	OutputTokens int64
+	CacheRead    int64
+	CacheWrite   int64
+}
+
 // SessionUsage represents complete token usage summary for a session
 type SessionUsage struct {
 	UserTurns    int

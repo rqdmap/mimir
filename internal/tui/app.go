@@ -100,6 +100,7 @@ type statsDataLoadedMsg struct {
 	models       []model.ModelStat
 	agents       []model.AgentStat
 	daily        []model.DailyPoint
+	modelDaily   []model.ModelDailyPoint
 	userRequests int
 }
 
@@ -149,12 +150,12 @@ type App struct {
 	searchMode          bool
 	searchQuery         string
 
-	confirmCreateDir    bool
-	pendingCreateDir    string
-	pendingExportSess   model.Session
-	pendingExportMsgs   []model.Message
-	pendingExportTags   []string
-	pendingExportOpts   export.Options
+	confirmCreateDir  bool
+	pendingCreateDir  string
+	pendingExportSess model.Session
+	pendingExportMsgs []model.Message
+	pendingExportTags []string
+	pendingExportOpts export.Options
 
 	ideasSearchQuery string
 	tagsSearchQuery  string
@@ -169,7 +170,7 @@ type App struct {
 	showHelp    bool
 	showWelcome bool
 	activeTab   AppTab
-	theme     panes.Theme
+	theme       panes.Theme
 
 	autoPreview  bool
 	ratio        [3]int
@@ -613,7 +614,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case statsDataLoadedMsg:
-		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily, msg.userRequests)
+		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily, msg.modelDaily, msg.userRequests)
 		return a, nil
 
 	case sessionUsageLoadedMsg:
@@ -836,6 +837,28 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.searchMode = false
 			a.applyFilters()
 			return a, nil
+		case "ctrl+u":
+			switch a.activeTab {
+			case TabSessions:
+				a.searchQuery = ""
+			case TabIdeas:
+				a.ideasSearchQuery = ""
+			case TabTags:
+				a.tagsSearchQuery = ""
+			case TabStats:
+				a.statsSearchQuery = ""
+			}
+		case "ctrl+w":
+			switch a.activeTab {
+			case TabSessions:
+				a.searchQuery = deleteLastWord(a.searchQuery)
+			case TabIdeas:
+				a.ideasSearchQuery = deleteLastWord(a.ideasSearchQuery)
+			case TabTags:
+				a.tagsSearchQuery = deleteLastWord(a.tagsSearchQuery)
+			case TabStats:
+				a.statsSearchQuery = deleteLastWord(a.statsSearchQuery)
+			}
 		case "backspace":
 			switch a.activeTab {
 			case TabSessions:
@@ -1492,8 +1515,9 @@ func (a App) loadStatsDataCmd(period model.StatsPeriod) tea.Cmd {
 		models, _ := db.GetUsageByModel(ocDB, since)
 		agents, _ := db.GetUsageByAgent(ocDB, since)
 		daily, _ := db.GetDailyUsage(ocDB, 0)
+		modelDaily, _ := db.GetDailyUsageByModel(ocDB, 0)
 		userReqs, _ := db.GetUserRequestCount(ocDB, since)
-		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily, userRequests: userReqs}
+		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily, modelDaily: modelDaily, userRequests: userReqs}
 	}
 }
 
@@ -1594,6 +1618,18 @@ func filterSessionsByTagName(sessions []model.Session, sessionTags map[string][]
 		}
 	}
 	return out
+}
+
+func deleteLastWord(s string) string {
+	runes := []rune(s)
+	i := len(runes) - 1
+	for i >= 0 && runes[i] == ' ' {
+		i--
+	}
+	for i >= 0 && runes[i] != ' ' {
+		i--
+	}
+	return string(runes[:i+1])
 }
 
 // applyFilters rebuilds the session list applying sub-agent filter and search filter.
@@ -1880,7 +1916,7 @@ func (a App) buildStatusBar() string {
 		line1 := fmt.Sprintf("Loading %d/%d sessions...", a.loadedCount, a.totalCount)
 		bar := descStyle.Render(line1)
 		if a.err != "" {
-			bar += errStyle.Render("  ✗ "+a.err)
+			bar += errStyle.Render("  ✗ " + a.err)
 		}
 		return bar + "\n" + line2
 	}
@@ -1892,7 +1928,9 @@ func (a App) buildStatusBar() string {
 	switch a.activeTab {
 	case TabStats:
 		hints = append(hints, hp("Tab", "section"), hp("s", "sort"))
-		if a.statsView.section != statsSectionChart {
+		if a.statsView.section == statsSectionChart {
+			hints = append(hints, hp("h/l", "cursor"), hp("0/$", "first/last"))
+		} else {
 			hints = append([]struct{ key, desc string }{hp("1", "Today"), hp("7", "7d"), hp("3", "30d"), hp("0", "All")}, hints...)
 		}
 	default:
@@ -1923,7 +1961,7 @@ func (a App) buildStatusBar() string {
 
 	line1 := truncateStyledHints(hints, a.width, hk)
 	if a.err != "" {
-		line1 += errStyle.Render("  ✗ "+a.err)
+		line1 += errStyle.Render("  ✗ " + a.err)
 	}
 	return line1 + "\n" + line2
 }

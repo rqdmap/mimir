@@ -199,6 +199,20 @@ func (c ConversationPane) Update(msg tea.Msg) (ConversationPane, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "enter":
 				c.convSearchMode = false
+			case "ctrl+u":
+				c.convSearchQuery = ""
+				c.updateConvSearchHighlights()
+			case "ctrl+w":
+				runes := []rune(c.convSearchQuery)
+				i := len(runes) - 1
+				for i >= 0 && runes[i] == ' ' {
+					i--
+				}
+				for i >= 0 && runes[i] != ' ' {
+					i--
+				}
+				c.convSearchQuery = string(runes[:i+1])
+				c.updateConvSearchHighlights()
 			case "backspace":
 				if runes := []rune(c.convSearchQuery); len(runes) > 0 {
 					c.convSearchQuery = string(runes[:len(runes)-1])
