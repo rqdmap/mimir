@@ -927,6 +927,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case KeyExport:
+		if a.activeTab != TabSessions {
+			return a, nil
+		}
 		if a.selectedSession != nil {
 			a.flash = flashMsg{}
 			a.exportOverlay.SetSize(a.width, a.height)
