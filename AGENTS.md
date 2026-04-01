@@ -79,10 +79,19 @@ The TUI has **deeply interleaved state**. A change in one area frequently breaks
 - **Focus state** — `FocusSessionList`, `FocusConversation`, `FocusMetadata` each have different key behaviors. Ensure your change works in all focus states.
 - **ideaMode / ideaShowConv** — the Ideas tab has a complex toggle between showing idea content vs linked session conversation. Changes to `sessionLoadedMsg` or `conversation.SetMessages` can break this.
 
+**Keybinding change checklist** — when modifying ANY keybinding, you MUST update ALL 6 locations:
+
+1. `app.go` `handleKey()` — the actual key logic
+2. `app.go` `buildStatusBar()` — the bottom-bar hint text
+3. `app.go` `overlayHelp()` — the `?` help overlay
+4. `app.go` `overlayWelcome()` — the first-launch welcome overlay
+5. Sub-component `handleKey()` if applicable (e.g. `stats.go`)
+6. `README.md` — the Keybindings tables
+
 **After any TUI change, mentally walk through these scenarios:**
 
 1. Launch → Sessions tab → navigate → open session → scroll conversation → search → exit search
-2. Switch to Ideas tab → navigate ideas → `Tab` toggle idea/conversation → `Enter` jump to session
+2. Switch to Ideas tab → navigate ideas → `Space` toggle idea/conversation → `Enter` jump to session
 3. Switch to Tags tab → enter manage mode → navigate sessions → `d` remove → `Esc` back
 4. `t` tag a session → `i` capture idea → `Ctrl+E` export → `?` help overlay
 5. `/` search in each tab → `Esc` clear → `/` search in conversation pane
