@@ -417,28 +417,63 @@ func ListProjects(db *sql.DB) ([]model.Project, error) {
 // GetUsageByModel returns token usage aggregated by model, optionally filtered
 // by a Unix millisecond timestamp (since). Pass since=0 to return all data.
 func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
-	query := `
-		SELECT
-			JSON_EXTRACT(data, '$.modelID')    AS modelID,
-			JSON_EXTRACT(data, '$.providerID') AS providerID,
-			COUNT(*)                           AS turns,
-			COUNT(DISTINCT session_id)         AS requests,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
-		FROM message
-		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
-		  AND JSON_EXTRACT(data, '$.modelID') IS NOT NULL`
-	args := []interface{}{}
+	var (
+		aiCTESince   string
+		userCTESince string
+		mainSince    string
+		args         []interface{}
+	)
 	if since > 0 {
-		query += `
-		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
-		args = append(args, since)
+		aiCTESince = "AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?"
+		userCTESince = "AND CAST(JSON_EXTRACT(u.data, '$.time.created') AS INTEGER) >= ?"
+		mainSince = "AND CAST(JSON_EXTRACT(m.data, '$.time.created') AS INTEGER) >= ?"
+		args = append(args, since, since, since)
 	}
-	query += `
-		GROUP BY JSON_EXTRACT(data, '$.modelID'), JSON_EXTRACT(data, '$.providerID')
-		ORDER BY inputTokens DESC`
+
+	query := fmt.Sprintf(`
+		WITH model_sessions AS (
+			SELECT DISTINCT
+				JSON_EXTRACT(data, '$.modelID')    AS modelID,
+				JSON_EXTRACT(data, '$.providerID') AS providerID,
+				session_id
+			FROM message
+			WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
+			  AND JSON_EXTRACT(data, '$.modelID') IS NOT NULL
+			  %s
+		),
+		user_reqs AS (
+			SELECT
+				ms.modelID,
+				ms.providerID,
+				COUNT(*)                                         AS user_requests,
+				COUNT(CASE WHEN s.parent_id IS NULL THEN 1 END) AS human_requests
+			FROM message u
+			JOIN session s ON u.session_id = s.id
+			JOIN model_sessions ms ON u.session_id = ms.session_id
+			WHERE JSON_EXTRACT(u.data, '$.role') = 'user'
+			  %s
+			GROUP BY ms.modelID, ms.providerID
+		)
+		SELECT
+			JSON_EXTRACT(m.data, '$.modelID')    AS modelID,
+			JSON_EXTRACT(m.data, '$.providerID') AS providerID,
+			COUNT(*)                             AS turns,
+			COUNT(DISTINCT m.session_id)         AS sessions,
+			COALESCE(ur.user_requests,  0)       AS user_requests,
+			COALESCE(ur.human_requests, 0)       AS human_requests,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.input')       AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.output')      AS INTEGER)), 0) AS outputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
+		FROM message m
+		LEFT JOIN user_reqs ur
+			ON JSON_EXTRACT(m.data, '$.modelID')    = ur.modelID
+		   AND JSON_EXTRACT(m.data, '$.providerID') = ur.providerID
+		WHERE JSON_EXTRACT(m.data, '$.role') = 'assistant'
+		  AND JSON_EXTRACT(m.data, '$.modelID') IS NOT NULL
+		  %s
+		GROUP BY JSON_EXTRACT(m.data, '$.modelID'), JSON_EXTRACT(m.data, '$.providerID')
+		ORDER BY inputTokens DESC`, aiCTESince, userCTESince, mainSince)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -449,7 +484,9 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 	var results []model.ModelStat
 	for rows.Next() {
 		var s model.ModelStat
-		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheWrite); err != nil {
+		if err := rows.Scan(&s.ModelID, &s.ProviderID, &s.Turns, &s.Sessions,
+			&s.UserRequests, &s.HumanRequests,
+			&s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheWrite); err != nil {
 			return nil, fmt.Errorf("scan model stat: %w", err)
 		}
 		total := s.InputTokens + s.CacheRead + s.CacheWrite
@@ -464,28 +501,62 @@ func GetUsageByModel(db *sql.DB, since int64) ([]model.ModelStat, error) {
 	return results, nil
 }
 
-// GetUsageByAgent returns token usage aggregated by agent name, optionally
-// filtered by a Unix millisecond timestamp (since). Pass since=0 for all data.
 func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
-	query := `
-		SELECT
-			LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) AS agent,
-			COUNT(*)                                                  AS turns,
-			COUNT(DISTINCT session_id)                                AS requests,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')  AS INTEGER)), 0) AS inputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output') AS INTEGER)), 0) AS outputTokens
-		FROM message
-		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
-		  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) != ''`
-	args := []interface{}{}
+	var (
+		aiCTESince   string
+		userCTESince string
+		mainSince    string
+		args         []interface{}
+	)
 	if since > 0 {
-		query += `
-		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
-		args = append(args, since)
+		aiCTESince = "AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?"
+		userCTESince = "AND CAST(JSON_EXTRACT(u.data, '$.time.created') AS INTEGER) >= ?"
+		mainSince = "AND CAST(JSON_EXTRACT(m.data, '$.time.created') AS INTEGER) >= ?"
+		args = append(args, since, since, since)
 	}
-	query += `
-		GROUP BY LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), '')))
-		ORDER BY inputTokens DESC`
+
+	query := fmt.Sprintf(`
+		WITH agent_sessions AS (
+			SELECT DISTINCT
+				LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) AS agent,
+				session_id
+			FROM message
+			WHERE JSON_EXTRACT(data, '$.role') = 'assistant'
+			  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) != ''
+			  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(data, '$.agent'), ''))) != 'compaction'
+			  %s
+		),
+		user_reqs AS (
+			SELECT
+				ag.agent,
+				COUNT(*)                                         AS user_requests,
+				COUNT(CASE WHEN s.parent_id IS NULL THEN 1 END) AS human_requests
+			FROM message u
+			JOIN session s ON u.session_id = s.id
+			JOIN agent_sessions ag ON u.session_id = ag.session_id
+			WHERE JSON_EXTRACT(u.data, '$.role') = 'user'
+			  %s
+			GROUP BY ag.agent
+		)
+		SELECT
+			LOWER(TRIM(COALESCE(JSON_EXTRACT(m.data, '$.agent'), ''))) AS agent,
+			COUNT(*)                                                   AS turns,
+			COUNT(DISTINCT m.session_id)                               AS sessions,
+			COALESCE(ur.user_requests,  0)                             AS user_requests,
+			COALESCE(ur.human_requests, 0)                             AS human_requests,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.input')       AS INTEGER)), 0) AS inputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.output')      AS INTEGER)), 0) AS outputTokens,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+			COALESCE(SUM(CAST(JSON_EXTRACT(m.data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
+		FROM message m
+		LEFT JOIN user_reqs ur
+			ON LOWER(TRIM(COALESCE(JSON_EXTRACT(m.data, '$.agent'), ''))) = ur.agent
+		WHERE JSON_EXTRACT(m.data, '$.role') = 'assistant'
+		  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(m.data, '$.agent'), ''))) != ''
+		  AND LOWER(TRIM(COALESCE(JSON_EXTRACT(m.data, '$.agent'), ''))) != 'compaction'
+		  %s
+		GROUP BY LOWER(TRIM(COALESCE(JSON_EXTRACT(m.data, '$.agent'), '')))
+		ORDER BY inputTokens DESC`, aiCTESince, userCTESince, mainSince)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -496,8 +567,14 @@ func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
 	var results []model.AgentStat
 	for rows.Next() {
 		var s model.AgentStat
-		if err := rows.Scan(&s.Agent, &s.Turns, &s.Requests, &s.InputTokens, &s.OutputTokens); err != nil {
+		if err := rows.Scan(&s.Agent, &s.Turns, &s.Sessions,
+			&s.UserRequests, &s.HumanRequests,
+			&s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheWrite); err != nil {
 			return nil, fmt.Errorf("scan agent stat: %w", err)
+		}
+		total := s.InputTokens + s.CacheRead + s.CacheWrite
+		if total > 0 {
+			s.CachePercent = float64(s.CacheRead) / float64(total) * 100.0
 		}
 		results = append(results, s)
 	}
@@ -510,25 +587,42 @@ func GetUsageByAgent(db *sql.DB, since int64) ([]model.AgentStat, error) {
 // GetDailyUsage returns token usage aggregated by calendar day (local time),
 // ordered chronologically. Pass since=0 for all data.
 func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
-	query := `
-		SELECT
-			date(CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
-			COUNT(*)                                                                                    AS turns,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')      AS INTEGER)), 0) AS inputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')     AS INTEGER)), 0) AS outputTokens,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
-			COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
-		FROM message
-		WHERE JSON_EXTRACT(data, '$.role') = 'assistant'`
-	args := []interface{}{}
+	sinceClause := ""
+	var args []interface{}
 	if since > 0 {
-		query += `
-		  AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
-		args = append(args, since)
+		sinceClause = "AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?"
+		args = append(args, since, since)
 	}
-	query += `
-		GROUP BY day
-		ORDER BY day ASC`
+
+	query := fmt.Sprintf(`
+		WITH daily_ai AS (
+			SELECT
+				date(CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
+				COUNT(*)                   AS turns,
+				COUNT(DISTINCT session_id) AS sessions,
+				COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.input')       AS INTEGER)), 0) AS inputTokens,
+				COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.output')      AS INTEGER)), 0) AS outputTokens,
+				COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.read')  AS INTEGER)), 0) AS cacheRead,
+				COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cacheWrite
+			FROM message
+			WHERE JSON_EXTRACT(data, '$.role') = 'assistant' %s
+			GROUP BY day
+		),
+		daily_user AS (
+			SELECT
+				date(CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
+				COUNT(*)                                                                AS user_requests,
+				COUNT(CASE WHEN s.parent_id IS NULL THEN 1 END)                        AS human_requests
+			FROM message m
+			JOIN session s ON m.session_id = s.id
+			WHERE JSON_EXTRACT(m.data, '$.role') = 'user' %s
+			GROUP BY day
+		)
+		SELECT a.day, a.turns, a.inputTokens, a.outputTokens, a.cacheRead, a.cacheWrite,
+		       a.sessions, COALESCE(u.user_requests, 0), COALESCE(u.human_requests, 0)
+		FROM daily_ai a
+		LEFT JOIN daily_user u ON a.day = u.day
+		ORDER BY a.day ASC`, sinceClause, sinceClause)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -540,7 +634,7 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 	for rows.Next() {
 		var dayStr sql.NullString
 		var dp model.DailyPoint
-		if err := rows.Scan(&dayStr, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead, &dp.CacheWrite); err != nil {
+		if err := rows.Scan(&dayStr, &dp.Turns, &dp.InputTokens, &dp.OutputTokens, &dp.CacheRead, &dp.CacheWrite, &dp.Sessions, &dp.UserRequests, &dp.HumanRequests); err != nil {
 			return nil, fmt.Errorf("scan daily point: %w", err)
 		}
 		if !dayStr.Valid || dayStr.String == "" {
@@ -555,6 +649,54 @@ func GetDailyUsage(db *sql.DB, since int64) ([]model.DailyPoint, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error (daily usage): %w", err)
+	}
+	return results, nil
+}
+
+func GetDailyUserRequestsByProvider(db *sql.DB, since int64) ([]model.UserDailyPoint, error) {
+	sinceClause := ""
+	var args []interface{}
+	if since > 0 {
+		sinceClause = "AND CAST(JSON_EXTRACT(m.data, '$.time.created') AS INTEGER) >= ?"
+		args = append(args, since)
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			date(CAST(JSON_EXTRACT(m.data, '$.time.created') AS INTEGER)/1000, 'unixepoch', 'localtime') AS day,
+			COALESCE(JSON_EXTRACT(m.data, '$.model.providerID'), '') AS provider_id,
+			COUNT(*) AS user_requests,
+			COUNT(CASE WHEN s.parent_id IS NULL THEN 1 END) AS human_requests
+		FROM message m
+		JOIN session s ON m.session_id = s.id
+		WHERE JSON_EXTRACT(m.data, '$.role') = 'user' %s
+		GROUP BY day, provider_id
+		ORDER BY day ASC`, sinceClause)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query daily user requests by provider: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.UserDailyPoint
+	for rows.Next() {
+		var dayStr sql.NullString
+		var dp model.UserDailyPoint
+		if err := rows.Scan(&dayStr, &dp.ProviderID, &dp.UserRequests, &dp.HumanRequests); err != nil {
+			return nil, fmt.Errorf("scan user daily point: %w", err)
+		}
+		if !dayStr.Valid || dayStr.String == "" {
+			continue
+		}
+		t, err := time.Parse("2006-01-02", dayStr.String)
+		if err != nil {
+			continue
+		}
+		dp.Date = t
+		results = append(results, dp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error (daily user requests by provider): %w", err)
 	}
 	return results, nil
 }
@@ -612,6 +754,22 @@ func GetDailyUsageByModel(db *sql.DB, since int64) ([]model.ModelDailyPoint, err
 	return results, nil
 }
 
+// GetDistinctSessionCount returns the number of distinct sessions that had at
+// least one assistant message in the given period. Pass since=0 for all data.
+func GetDistinctSessionCount(db *sql.DB, since int64) (int, error) {
+	query := `SELECT COUNT(DISTINCT session_id) FROM message WHERE JSON_EXTRACT(data, '$.role') = 'assistant'`
+	args := []interface{}{}
+	if since > 0 {
+		query += ` AND CAST(JSON_EXTRACT(data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	var n int
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("query distinct session count: %w", err)
+	}
+	return n, nil
+}
+
 func GetUserRequestCount(db *sql.DB, since int64) (int, error) {
 	query := `SELECT COUNT(*) FROM message WHERE JSON_EXTRACT(data, '$.role') = 'user'`
 	args := []interface{}{}
@@ -622,6 +780,24 @@ func GetUserRequestCount(db *sql.DB, since int64) (int, error) {
 	var n int
 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("query user request count: %w", err)
+	}
+	return n, nil
+}
+
+func GetHumanRequestCount(db *sql.DB, since int64) (int, error) {
+	query := `
+		SELECT COUNT(*) FROM message m
+		JOIN session s ON m.session_id = s.id
+		WHERE JSON_EXTRACT(m.data, '$.role') = 'user'
+		  AND s.parent_id IS NULL`
+	args := []interface{}{}
+	if since > 0 {
+		query += ` AND CAST(JSON_EXTRACT(m.data, '$.time.created') AS INTEGER) >= ?`
+		args = append(args, since)
+	}
+	var n int
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("query human request count: %w", err)
 	}
 	return n, nil
 }

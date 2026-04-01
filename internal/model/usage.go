@@ -4,34 +4,44 @@ import "time"
 
 // ModelStat represents token usage for a specific model
 type ModelStat struct {
-	ModelID      string
-	ProviderID   string
-	Turns        int
-	Requests     int
-	InputTokens  int64
-	OutputTokens int64
-	CacheRead    int64
-	CacheWrite   int64
-	CachePercent float64 // 0.0 when CacheRead == 0
+	ModelID       string
+	ProviderID    string
+	Turns         int
+	Sessions      int
+	UserRequests  int
+	HumanRequests int
+	InputTokens   int64
+	OutputTokens  int64
+	CacheRead     int64
+	CacheWrite    int64
+	CachePercent  float64 // 0.0 when CacheRead == 0
 }
 
 // AgentStat represents token usage for a specific agent
 type AgentStat struct {
-	Agent        string // normalized to lowercase by DB query
-	Turns        int
-	Requests     int
-	InputTokens  int64
-	OutputTokens int64
+	Agent         string // normalized to lowercase by DB query
+	Turns         int
+	Sessions      int
+	UserRequests  int
+	HumanRequests int
+	InputTokens   int64
+	OutputTokens  int64
+	CacheRead     int64
+	CacheWrite    int64
+	CachePercent  float64 // 0.0 when CacheRead == 0
 }
 
 // DailyPoint represents token usage on a single day
 type DailyPoint struct {
-	Date         time.Time // truncated to day
-	Turns        int
-	InputTokens  int64
-	OutputTokens int64
-	CacheRead    int64
-	CacheWrite   int64
+	Date          time.Time // truncated to day
+	Turns         int
+	InputTokens   int64
+	OutputTokens  int64
+	CacheRead     int64
+	CacheWrite    int64
+	Sessions      int
+	UserRequests  int
+	HumanRequests int
 }
 
 // ModelDailyPoint represents token usage for a specific model on a single day.
@@ -44,6 +54,14 @@ type ModelDailyPoint struct {
 	OutputTokens int64
 	CacheRead    int64
 	CacheWrite   int64
+}
+
+// UserDailyPoint represents user request counts for a specific provider on a single day.
+type UserDailyPoint struct {
+	Date          time.Time
+	ProviderID    string
+	UserRequests  int
+	HumanRequests int
 }
 
 // SessionUsage represents complete token usage summary for a session

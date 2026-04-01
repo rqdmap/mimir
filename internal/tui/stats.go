@@ -31,7 +31,10 @@ type StatsView struct {
 	filterQuery      string
 	dailyPoints      []model.DailyPoint
 	modelDailyPoints []model.ModelDailyPoint
+	userDailyPoints  []model.UserDailyPoint
 	userRequests     int
+	humanRequests    int
+	totalSessions    int
 	loading          bool
 	section          int
 	modelCursor      int
@@ -39,9 +42,10 @@ type StatsView struct {
 	modelOffset      int
 	agentOffset      int
 	modelSortCol     int
-	chartContext     tslc.Model
-	chartOutput      tslc.Model
-	chartTurns       tslc.Model
+	agentSortCol     int
+	chartTokens      tslc.Model
+	chartCachePct    tslc.Model
+	chartReqs        tslc.Model
 	chartCursor      int
 	sortedPoints     []model.DailyPoint
 	width            int
@@ -88,13 +92,16 @@ func (v *StatsView) SetSize(width, height int) {
 	v.height = height
 }
 
-func (v *StatsView) SetData(period model.StatsPeriod, modelStats []model.ModelStat, agentStats []model.AgentStat, daily []model.DailyPoint, modelDaily []model.ModelDailyPoint, userRequests int) {
+func (v *StatsView) SetData(period model.StatsPeriod, modelStats []model.ModelStat, agentStats []model.AgentStat, daily []model.DailyPoint, modelDaily []model.ModelDailyPoint, userDaily []model.UserDailyPoint, userRequests int, humanRequests int, totalSessions int) {
 	v.period = period
 	v.modelStats = modelStats
 	v.agentStats = agentStats
 	v.dailyPoints = daily
 	v.modelDailyPoints = modelDaily
+	v.userDailyPoints = userDaily
 	v.userRequests = userRequests
+	v.humanRequests = humanRequests
+	v.totalSessions = totalSessions
 	v.loading = false
 
 	v.applyFilter()
@@ -126,7 +133,12 @@ func (v *StatsView) applyFilter() {
 				v.filteredAgents = append(v.filteredAgents, s)
 			}
 		}
-		v.buildCharts(v.filteredDailyPoints(q))
+		switch v.section {
+		case statsSectionAgent:
+			v.buildCharts(v.dailyPoints)
+		default:
+			v.buildCharts(v.filteredDailyPoints(q))
+		}
 	}
 	if v.modelCursor >= len(v.filteredModels) {
 		v.modelCursor = 0
@@ -140,6 +152,14 @@ func (v *StatsView) applyFilter() {
 }
 
 func (v *StatsView) filteredDailyPoints(q string) []model.DailyPoint {
+	userByDay := make(map[time.Time]map[string]model.UserDailyPoint)
+	for _, udp := range v.userDailyPoints {
+		if _, ok := userByDay[udp.Date]; !ok {
+			userByDay[udp.Date] = make(map[string]model.UserDailyPoint)
+		}
+		userByDay[udp.Date][strings.ToLower(udp.ProviderID)] = udp
+	}
+
 	byDay := make(map[time.Time]*model.DailyPoint)
 	for _, mdp := range v.modelDailyPoints {
 		if !strings.Contains(strings.ToLower(mdp.ModelID), q) && !strings.Contains(strings.ToLower(mdp.ProviderID), q) {
@@ -155,6 +175,12 @@ func (v *StatsView) filteredDailyPoints(q string) []model.DailyPoint {
 		dp.OutputTokens += mdp.OutputTokens
 		dp.CacheRead += mdp.CacheRead
 		dp.CacheWrite += mdp.CacheWrite
+		if provMap, ok := userByDay[mdp.Date]; ok {
+			if udp, ok := provMap[strings.ToLower(mdp.ProviderID)]; ok {
+				dp.UserRequests = udp.UserRequests
+				dp.HumanRequests = udp.HumanRequests
+			}
+		}
 	}
 	result := make([]model.DailyPoint, 0, len(byDay))
 	for _, dp := range byDay {
@@ -168,9 +194,9 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 	if len(daily) == 0 {
 		v.sortedPoints = nil
 		v.chartCursor = 0
-		v.chartContext = tslc.Model{}
-		v.chartOutput = tslc.Model{}
-		v.chartTurns = tslc.Model{}
+		v.chartTokens = tslc.Model{}
+		v.chartCachePct = tslc.Model{}
+		v.chartReqs = tslc.Model{}
 		return
 	}
 
@@ -193,35 +219,42 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 		eachH = 4
 	}
 
-	v.chartContext = tslc.New(chartWidth, eachH)
-	v.chartOutput = tslc.New(chartWidth, eachH)
-	v.chartTurns = tslc.New(chartWidth, eachH)
+	v.chartTokens = tslc.New(chartWidth, eachH)
+	v.chartCachePct = tslc.New(chartWidth, eachH)
+	v.chartReqs = tslc.New(chartWidth, eachH)
 
 	tokenFmt := func(_ int, val float64) string { return formatTokens(int64(math.Round(val))) }
-	turnsFmt := func(_ int, val float64) string { return fmt.Sprintf("%d", int64(math.Round(val))) }
+	pctFmt := func(_ int, val float64) string { return fmt.Sprintf("%.0f%%", val) }
+	intFmt := func(_ int, val float64) string { return fmt.Sprintf("%d", int64(math.Round(val))) }
 
-	v.chartContext.YLabelFormatter = tokenFmt
-	v.chartOutput.YLabelFormatter = tokenFmt
-	v.chartTurns.YLabelFormatter = turnsFmt
+	v.chartTokens.YLabelFormatter = tokenFmt
+	v.chartCachePct.YLabelFormatter = pctFmt
+	v.chartReqs.YLabelFormatter = intFmt
 
-	v.chartContext.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("33")))
-	v.chartOutput.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("10")))
-	v.chartTurns.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("214")))
+	v.chartTokens.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("33")))
+	v.chartCachePct.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("10")))
+	v.chartReqs.SetDataSetStyle("human", lipgloss.NewStyle().Foreground(lipgloss.Color("73")))
+	v.chartReqs.SetDataSetStyle("subagent", lipgloss.NewStyle().Foreground(lipgloss.Color("141")))
 
 	for _, dp := range points {
 		t := dp.Date
-		v.chartContext.Push(tslc.TimePoint{Time: t, Value: float64(dp.InputTokens + dp.CacheRead + dp.CacheWrite)})
-		v.chartOutput.Push(tslc.TimePoint{Time: t, Value: float64(dp.OutputTokens)})
-		v.chartTurns.Push(tslc.TimePoint{Time: t, Value: float64(dp.Turns)})
+		total := dp.InputTokens + dp.CacheRead + dp.CacheWrite
+		v.chartTokens.Push(tslc.TimePoint{Time: t, Value: float64(total)})
+		var cachePct float64
+		if total > 0 {
+			cachePct = float64(dp.CacheRead) / float64(total) * 100
+		}
+		v.chartCachePct.Push(tslc.TimePoint{Time: t, Value: cachePct})
+		v.chartReqs.PushDataSet("human", tslc.TimePoint{Time: t, Value: float64(dp.HumanRequests)})
+		v.chartReqs.PushDataSet("subagent", tslc.TimePoint{Time: t, Value: float64(dp.UserRequests - dp.HumanRequests)})
 	}
 
-	// Align Y-axis label widths across all three charts so the graph areas line up.
-	// Origin().X equals the auto-computed label width after all data is pushed.
-	maxLabelW := v.chartContext.Origin().X
-	if w := v.chartOutput.Origin().X; w > maxLabelW {
+	// Align Y-axis label widths so graph areas line up.
+	maxLabelW := v.chartTokens.Origin().X
+	if w := v.chartCachePct.Origin().X; w > maxLabelW {
 		maxLabelW = w
 	}
-	if w := v.chartTurns.Origin().X; w > maxLabelW {
+	if w := v.chartReqs.Origin().X; w > maxLabelW {
 		maxLabelW = w
 	}
 	padFmt := func(inner func(int, float64) string) func(int, float64) string {
@@ -233,13 +266,12 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 			return s
 		}
 	}
-	v.chartContext.YLabelFormatter = padFmt(tokenFmt)
-	v.chartOutput.YLabelFormatter = padFmt(tokenFmt)
-	v.chartTurns.YLabelFormatter = padFmt(turnsFmt)
-	// Force layout recalculation + data rescaling with the new padded formatters.
-	v.chartContext.Resize(chartWidth, eachH)
-	v.chartOutput.Resize(chartWidth, eachH)
-	v.chartTurns.Resize(chartWidth, eachH)
+	v.chartTokens.YLabelFormatter = padFmt(tokenFmt)
+	v.chartCachePct.YLabelFormatter = padFmt(pctFmt)
+	v.chartReqs.YLabelFormatter = padFmt(intFmt)
+	v.chartTokens.Resize(chartWidth, eachH)
+	v.chartCachePct.Resize(chartWidth, eachH)
+	v.chartReqs.Resize(chartWidth, eachH)
 }
 
 func (v *StatsView) resortModelStats() {
@@ -251,9 +283,27 @@ func (v *StatsView) resortModelStats() {
 		case 2:
 			return a.CachePercent > b.CachePercent
 		case 3:
-			return a.Turns > b.Turns
+			return a.UserRequests > b.UserRequests
 		case 4:
-			return a.Requests > b.Requests
+			return a.Sessions > b.Sessions
+		default:
+			return (a.InputTokens + a.CacheRead + a.CacheWrite) > (b.InputTokens + b.CacheRead + b.CacheWrite)
+		}
+	})
+}
+
+func (v *StatsView) resortAgentStats() {
+	sort.SliceStable(v.filteredAgents, func(i, j int) bool {
+		a, b := v.filteredAgents[i], v.filteredAgents[j]
+		switch v.agentSortCol {
+		case 1:
+			return a.OutputTokens > b.OutputTokens
+		case 2:
+			return a.CachePercent > b.CachePercent
+		case 3:
+			return a.UserRequests > b.UserRequests
+		case 4:
+			return a.Sessions > b.Sessions
 		default:
 			return (a.InputTokens + a.CacheRead + a.CacheWrite) > (b.InputTokens + b.CacheRead + b.CacheWrite)
 		}
@@ -344,6 +394,9 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 		if v.section == statsSectionModel {
 			v.modelSortCol = (v.modelSortCol + 1) % 5
 			v.resortModelStats()
+		} else if v.section == statsSectionAgent {
+			v.agentSortCol = (v.agentSortCol + 1) % 5
+			v.resortAgentStats()
 		}
 	}
 	return v, nil
@@ -351,7 +404,6 @@ func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 
 func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.Style) string {
 	var input, output, cacheRead, cacheWrite int64
-	var requests int
 	topModel := ""
 
 	for i, s := range v.filteredModels {
@@ -359,21 +411,20 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 		output += s.OutputTokens
 		cacheRead += s.CacheRead
 		cacheWrite += s.CacheWrite
-		requests += s.Requests
 		if i == 0 {
 			topModel = s.ModelID
 		}
 	}
 
 	total := input + cacheRead + cacheWrite
-	if total == 0 && requests == 0 && v.filterQuery == "" {
+	if total == 0 && v.totalSessions == 0 && v.filterQuery == "" {
 		return ""
 	}
 
 	sep := mutedStyle.Render("  │  ")
 	filterStyle := mutedStyle.Italic(true)
 
-	if total == 0 && requests == 0 {
+	if total == 0 && v.totalSessions == 0 {
 		return filterStyle.Render(`"` + v.filterQuery + `"`)
 	}
 
@@ -383,7 +434,9 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	}
 
 	parts := []string{
-		normalStyle.Render("Reqs ") + accentStyle.Render(fmt.Sprintf("%d", requests)),
+		normalStyle.Render("Sess ") + accentStyle.Render(fmt.Sprintf("%d", v.totalSessions)),
+		normalStyle.Render("Requests ") + accentStyle.Render(fmt.Sprintf("%d", v.userRequests)) +
+			mutedStyle.Render(fmt.Sprintf(" (Human %d  SubAgent %d)", v.humanRequests, v.userRequests-v.humanRequests)),
 		normalStyle.Render("In ") + accentStyle.Render(formatTokens(total)),
 		normalStyle.Render("Out ") + accentStyle.Render(formatTokens(output)),
 		normalStyle.Render("Cache ") + accentStyle.Render(fmt.Sprintf("%.0f%%", cachePercent)),
@@ -460,7 +513,6 @@ func (v StatsView) View() string {
 			sb.WriteString("\n")
 		}
 	}
-	sb.WriteString("\n")
 
 	if v.loading {
 		loadingMsg := lipgloss.NewStyle().
@@ -492,73 +544,82 @@ func (v StatsView) View() string {
 			sb.WriteString(lipgloss.Place(contentWidth, chartAreaH, lipgloss.Center, lipgloss.Center, noDataStyle.Render(msg)))
 			sb.WriteString("\n")
 		} else {
-			contextStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7DAEA3")).Bold(true)
-			outputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A9B665")).Bold(true)
-			turnsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E78A4E")).Bold(true)
+			tokensStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7DAEA3")).Bold(true)
+			cachePctStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A9B665")).Bold(true)
+			reqsStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E78A4E")).Bold(true)
 
-			contextChartStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7DAEA3"))
-			outputChartStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A9B665"))
-			turnsChartStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E78A4E"))
-
-			v.chartContext.SetStyle(contextChartStyle)
-			v.chartOutput.SetStyle(outputChartStyle)
-			v.chartTurns.SetStyle(turnsChartStyle)
+			v.chartTokens.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#7DAEA3")))
+			v.chartCachePct.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#A9B665")))
+			v.chartReqs.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#E78A4E")))
 
 			colHighlight := lipgloss.NewStyle().Background(v.theme.AccentBg)
 
-			// Cursor detail for inline display next to each title
-			var cursorDate, cursorCtx, cursorOut, cursorTurns string
+			var cursorDate, cursorTokens, cursorOut, cursorCachePct, cursorReqs string
+			var cursorHuman, cursorSubAgent int
 			if len(v.sortedPoints) > 0 && v.chartCursor >= 0 && v.chartCursor < len(v.sortedPoints) {
 				dp := v.sortedPoints[v.chartCursor]
+				total := dp.InputTokens + dp.CacheRead + dp.CacheWrite
 				cursorDate = dp.Date.Format("2006-01-02")
-				cursorCtx = formatTokens(dp.InputTokens + dp.CacheRead + dp.CacheWrite)
+				cursorTokens = formatTokens(total)
 				cursorOut = formatTokens(dp.OutputTokens)
-				cursorTurns = fmt.Sprintf("%d", dp.Turns)
+				cursorReqs = fmt.Sprintf("%d", dp.UserRequests)
+				cursorHuman = dp.HumanRequests
+				cursorSubAgent = dp.UserRequests - dp.HumanRequests
+				var cachePct float64
+				if total > 0 {
+					cachePct = float64(dp.CacheRead) / float64(total) * 100
+				}
+				cursorCachePct = fmt.Sprintf("%.0f%%", cachePct)
 			}
 
-			// Context+Cache chart
-			title := contextStyle.Render("── Context+Cache ──")
+			title := tokensStyle.Render("── Input ──")
 			if cursorDate != "" {
-				title += mutedStyle.Render("  "+cursorDate+": ") + contextStyle.Render(cursorCtx)
+				title += mutedStyle.Render("  "+cursorDate+": ") + tokensStyle.Render(cursorTokens)
+				title += mutedStyle.Render("  (Output: ") + tokensStyle.Render(cursorOut) + mutedStyle.Render(")")
 			}
 			sb.WriteString(title)
 			sb.WriteString("\n")
-			v.chartContext.DrawBrailleAll()
+			v.chartTokens.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartContext.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartTokens.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
 			}
-			sb.WriteString(v.chartContext.View())
+			sb.WriteString(v.chartTokens.View())
 			sb.WriteString("\n")
 
-			// Output chart
-			title = outputStyle.Render("── Output ──")
+			title = cachePctStyle.Render("── Cache% ──")
 			if cursorDate != "" {
-				title += mutedStyle.Render("  "+cursorDate+": ") + outputStyle.Render(cursorOut)
+				title += mutedStyle.Render("  "+cursorDate+": ") + cachePctStyle.Render(cursorCachePct)
 			}
 			sb.WriteString(title)
 			sb.WriteString("\n")
-			v.chartOutput.DrawBrailleAll()
+			v.chartCachePct.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartOutput.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartCachePct.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
 			}
-			sb.WriteString(v.chartOutput.View())
+			sb.WriteString(v.chartCachePct.View())
 			sb.WriteString("\n")
 
-			// Turns chart
-			title = turnsStyle.Render("── Turns ──")
+			humanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("73")).Bold(true)
+			subagentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
+
+			title = reqsStyle.Render("── Reqs ──")
+			title += "  " + humanStyle.Render("●") + mutedStyle.Render(" Human")
+			title += "  " + subagentStyle.Render("●") + mutedStyle.Render(" SubAgent")
 			if cursorDate != "" {
-				title += mutedStyle.Render("  "+cursorDate+": ") + turnsStyle.Render(cursorTurns)
+				title += mutedStyle.Render("  "+cursorDate+": ") + reqsStyle.Render(cursorReqs)
+				title += mutedStyle.Render(fmt.Sprintf("  (Human %d  SubAgent %d)", cursorHuman, cursorSubAgent))
 			}
 			sb.WriteString(title)
 			sb.WriteString("\n")
-			v.chartTurns.DrawBrailleAll()
+			v.chartReqs.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartTurns.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartReqs.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
 			}
-			sb.WriteString(v.chartTurns.View())
+			sb.WriteString(v.chartReqs.View())
 		}
 
 	case statsSectionModel:
+		sb.WriteString("\n")
 		if len(v.filteredModels) == 0 {
 			sb.WriteString(mutedStyle.Render("No data for this period."))
 			sb.WriteString("\n")
@@ -570,13 +631,13 @@ func (v StatsView) View() string {
 				return ""
 			}
 
+			colSess := 6
 			colTurns := 7
-			colReqs := 6
 			colInput := 10
 			colOutput := 10
 			colCache := 8
 			colProvider := 14
-			colModel := contentWidth - colInput - colOutput - colCache - colTurns - colReqs - colProvider - 13
+			colModel := contentWidth - colInput - colOutput - colCache - colSess - colTurns - colProvider - 13
 
 			if colModel < 12 {
 				colModel = 12
@@ -589,10 +650,10 @@ func (v StatsView) View() string {
 			hInput := fmt.Sprintf("%*s%s", colInput-len(sortIndicator(0)), "Input", sortIndicator(0))
 			hOutput := fmt.Sprintf("%*s%s", colOutput-len(sortIndicator(1)), "Output", sortIndicator(1))
 			hCache := fmt.Sprintf("%*s%s", colCache-len(sortIndicator(2)), "Cache%", sortIndicator(2))
-			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Turns", sortIndicator(3))
-			hReqs := fmt.Sprintf("%*s%s", colReqs-len(sortIndicator(4)), "Reqs", sortIndicator(4))
+			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Reqs", sortIndicator(3))
+			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sess", sortIndicator(4))
 
-			headerLine := hModel + "  " + hProvider + "  " + hInput + "  " + hOutput + "  " + hCache + "  " + hTurns + "  " + hReqs
+			headerLine := hModel + "  " + hProvider + "  " + hInput + "  " + hOutput + "  " + hCache + "  " + hTurns + "  " + hSess
 			sb.WriteString(headerStyle.Render(headerLine))
 			sb.WriteString("\n")
 
@@ -620,8 +681,8 @@ func (v StatsView) View() string {
 					colInput, formatTokens(stat.InputTokens+stat.CacheRead+stat.CacheWrite),
 					colOutput, formatTokens(stat.OutputTokens),
 					colCache-1, stat.CachePercent,
-					colTurns, stat.Turns,
-					colReqs, stat.Requests,
+					colTurns, stat.UserRequests,
+					colSess, stat.Sessions,
 				)
 
 				if i == v.modelCursor {
@@ -634,15 +695,24 @@ func (v StatsView) View() string {
 		}
 
 	case statsSectionAgent:
+		sb.WriteString("\n")
 		if len(v.filteredAgents) == 0 {
 			sb.WriteString(mutedStyle.Render("No data for this period."))
 			sb.WriteString("\n")
 		} else {
+			sortIndicator := func(col int) string {
+				if col == v.agentSortCol {
+					return " ▼"
+				}
+				return ""
+			}
+
+			colSess := 6
 			colTurns := 7
-			colReqs := 6
 			colInput := 10
 			colOutput := 10
-			colAgent := contentWidth - colInput - colOutput - colTurns - colReqs - 8
+			colCache := 8
+			colAgent := contentWidth - colInput - colOutput - colCache - colTurns - colSess - 13
 
 			if colAgent < 12 {
 				colAgent = 12
@@ -650,13 +720,14 @@ func (v StatsView) View() string {
 
 			headerStyle := lipgloss.NewStyle().Foreground(v.theme.Accent).Bold(true)
 
-			headerLine := fmt.Sprintf("%-*s  %*s  %*s  %*s  %*s",
-				colAgent, "Agent",
-				colInput, "Input",
-				colOutput, "Output",
-				colTurns, "Turns",
-				colReqs, "Reqs",
-			)
+			hAgent := fmt.Sprintf("%-*s", colAgent, "Agent")
+			hInput := fmt.Sprintf("%*s%s", colInput-len(sortIndicator(0)), "Input", sortIndicator(0))
+			hOutput := fmt.Sprintf("%*s%s", colOutput-len(sortIndicator(1)), "Output", sortIndicator(1))
+			hCache := fmt.Sprintf("%*s%s", colCache-len(sortIndicator(2)), "Cache%", sortIndicator(2))
+			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Reqs", sortIndicator(3))
+			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sess", sortIndicator(4))
+
+			headerLine := hAgent + "  " + hInput + "  " + hOutput + "  " + hCache + "  " + hTurns + "  " + hSess
 			sb.WriteString(headerStyle.Render(headerLine))
 			sb.WriteString("\n")
 
@@ -673,12 +744,13 @@ func (v StatsView) View() string {
 					agentName = string(runes[:colAgent-1]) + "…"
 				}
 
-				line := fmt.Sprintf("%-*s  %*s  %*s  %*d  %*d",
+				line := fmt.Sprintf("%-*s  %*s  %*s  %*.1f%%  %*d  %*d",
 					colAgent, agentName,
-					colInput, formatTokens(stat.InputTokens),
+					colInput, formatTokens(stat.InputTokens+stat.CacheRead+stat.CacheWrite),
 					colOutput, formatTokens(stat.OutputTokens),
-					colTurns, stat.Turns,
-					colReqs, stat.Requests,
+					colCache-1, stat.CachePercent,
+					colTurns, stat.UserRequests,
+					colSess, stat.Sessions,
 				)
 
 				if i == v.agentCursor {

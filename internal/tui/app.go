@@ -96,12 +96,15 @@ type sessionsBatchLoadedMsg struct {
 }
 
 type statsDataLoadedMsg struct {
-	period       model.StatsPeriod
-	models       []model.ModelStat
-	agents       []model.AgentStat
-	daily        []model.DailyPoint
-	modelDaily   []model.ModelDailyPoint
-	userRequests int
+	period        model.StatsPeriod
+	models        []model.ModelStat
+	agents        []model.AgentStat
+	daily         []model.DailyPoint
+	modelDaily    []model.ModelDailyPoint
+	userDaily     []model.UserDailyPoint
+	userRequests  int
+	humanRequests int
+	totalSessions int
 }
 
 type sessionUsageLoadedMsg struct {
@@ -614,7 +617,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case statsDataLoadedMsg:
-		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily, msg.modelDaily, msg.userRequests)
+		a.statsView.SetData(msg.period, msg.models, msg.agents, msg.daily, msg.modelDaily, msg.userDaily, msg.userRequests, msg.humanRequests, msg.totalSessions)
 		return a, nil
 
 	case sessionUsageLoadedMsg:
@@ -1516,8 +1519,11 @@ func (a App) loadStatsDataCmd(period model.StatsPeriod) tea.Cmd {
 		agents, _ := db.GetUsageByAgent(ocDB, since)
 		daily, _ := db.GetDailyUsage(ocDB, 0)
 		modelDaily, _ := db.GetDailyUsageByModel(ocDB, 0)
+		userDaily, _ := db.GetDailyUserRequestsByProvider(ocDB, 0)
 		userReqs, _ := db.GetUserRequestCount(ocDB, since)
-		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily, modelDaily: modelDaily, userRequests: userReqs}
+		humanReqs, _ := db.GetHumanRequestCount(ocDB, since)
+		totalSessions, _ := db.GetDistinctSessionCount(ocDB, since)
+		return statsDataLoadedMsg{period: period, models: models, agents: agents, daily: daily, modelDaily: modelDaily, userDaily: userDaily, userRequests: userReqs, humanRequests: humanReqs, totalSessions: totalSessions}
 	}
 }
 

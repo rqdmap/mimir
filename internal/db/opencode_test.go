@@ -81,7 +81,14 @@ func newInMemoryOpencodeDB(t *testing.T) *sql.DB {
 		data TEXT NOT NULL DEFAULT '{}'
 	)`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf("create message table: %v", err)
+	}
+	_, err = d.Exec(`CREATE TABLE session (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT
+	)`)
+	if err != nil {
+		t.Fatalf("create session table: %v", err)
 	}
 	return d
 }
