@@ -8,12 +8,11 @@ import (
 
 var validTabNames = map[string]bool{
 	"sessions": true,
-	"ideas":    true,
 	"tags":     true,
 	"stats":    true,
 }
 
-var DefaultTabOrder = []string{"sessions", "ideas", "tags", "stats"}
+var DefaultTabOrder = []string{"sessions", "tags", "stats"}
 var DefaultRatio = []int{1, 4, 1}
 
 type LayoutConfig struct {
