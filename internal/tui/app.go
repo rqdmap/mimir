@@ -348,8 +348,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			a.metadata.SetSessionMeta(msg.meta)
-			a.metadata.SetMessageCount(len(msg.messages))
+			a.metadata.SetSessionMeta(msg.meta, a.selectedSession != nil && a.selectedSession.ParentID != "")
+			if a.selectedSession != nil {
+				a.metadata.SetSessionTitle(a.selectedSession.Title)
+			}
 		}
 		a.err = ""
 		if a.managerDB != nil && msg.meta.SessionID != "" {
@@ -562,12 +564,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionMetaRefreshedMsg:
-		a.metadata.SetSessionMeta(msg.meta)
+		a.metadata.SetSessionMeta(msg.meta, a.selectedSession != nil && a.selectedSession.ParentID != "")
+		if a.selectedSession != nil {
+			a.metadata.SetSessionTitle(a.selectedSession.Title)
+		}
 		return a, nil
 
 	case oneSessionTagsRefreshedMsg:
 		a.sessionTags[msg.sessionID] = msg.tags
-		a.metadata.SetSessionMeta(msg.meta)
+		a.metadata.SetSessionMeta(msg.meta, a.selectedSession != nil && a.selectedSession.ParentID != "")
+		if a.selectedSession != nil {
+			a.metadata.SetSessionTitle(a.selectedSession.Title)
+		}
 		a.applyFilters()
 		return a, nil
 

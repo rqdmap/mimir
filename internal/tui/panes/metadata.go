@@ -18,12 +18,14 @@ type MetadataPane struct {
 	width        int
 	height       int
 	hasSession   bool // false = no session selected yet
+	isSubAgent   bool
 	sessionIdeas []model.Idea
 	ideaMode     bool
 	selectedIdea *model.Idea
 	theme        Theme
 	usage        model.SessionUsage
 	hasUsage     bool
+	sessionTitle string
 }
 
 func NewMetadataPane(width, height int, theme Theme) MetadataPane {
@@ -34,9 +36,14 @@ func NewMetadataPane(width, height int, theme Theme) MetadataPane {
 	}
 }
 
-func (m *MetadataPane) SetSessionMeta(meta model.SessionMeta) {
+func (m *MetadataPane) SetSessionMeta(meta model.SessionMeta, isSubAgent bool) {
 	m.meta = meta
 	m.hasSession = true
+	m.isSubAgent = isSubAgent
+}
+
+func (m *MetadataPane) SetSessionTitle(title string) {
+	m.sessionTitle = title
 }
 
 func (m *MetadataPane) SetSessionIdeas(ideas []model.Idea) {
@@ -77,6 +84,7 @@ func (m *MetadataPane) ClearSession() {
 	m.messageCount = 0
 	m.usage = model.SessionUsage{}
 	m.hasUsage = false
+	m.sessionTitle = ""
 }
 
 func (m MetadataPane) Init() tea.Cmd { return nil }
@@ -121,6 +129,16 @@ func (m MetadataPane) View() string {
 	title := titleStyle.Render("Metadata")
 
 	// Sections
+	innerW := m.width - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+
+	sessHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Session ───")
+	wrapStyle := lipgloss.NewStyle().Width(innerW)
+	sessTitle := wrapStyle.Foreground(m.theme.TextNormal).Render(m.sessionTitle)
+	sessID := wrapStyle.Foreground(m.theme.TextMuted).Render(m.meta.SessionID)
+
 	// Tags
 	tagHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Tags")
 	var tagsView string
@@ -174,10 +192,6 @@ func (m MetadataPane) View() string {
 		selectedIdeaSection = "\n" + sidHeader + "\n" + sidContent + "\n" + sidSource + "\n" + sidTime
 	}
 
-	// Stats
-	statsHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Stats ───")
-	statsView := fmt.Sprintf("Messages: %d", m.messageCount)
-
 	// Usage section
 	usageHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Usage ───")
 	var usageBody string
@@ -186,8 +200,11 @@ func (m MetadataPane) View() string {
 	} else if !m.hasUsage {
 		usageBody = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Italic(true).Render("Loading...")
 	} else {
-		// You X   AI Y
-		turnsLine := fmt.Sprintf("You %-5d  AI %d", m.usage.UserTurns, m.usage.AITurns)
+		reqsLabel := "Human"
+		if m.isSubAgent {
+			reqsLabel = "SubAgent"
+		}
+		reqsLine := fmt.Sprintf("Reqs    %8s  (%s)", fmt.Sprintf("%d", m.usage.UserTurns), reqsLabel)
 		inputLine := fmt.Sprintf("Input   %8s", fmtTokens(m.usage.InputTokens+m.usage.CacheRead+m.usage.CacheWrite))
 		outputLine := fmt.Sprintf("Output  %8s", fmtTokens(m.usage.OutputTokens))
 		var cacheLine string
@@ -196,7 +213,7 @@ func (m MetadataPane) View() string {
 		} else {
 			cacheLine = fmt.Sprintf("Cache   %8s", fmtTokens(m.usage.CacheRead))
 		}
-		usageBody = strings.Join([]string{turnsLine, inputLine, outputLine, cacheLine}, "\n")
+		usageBody = strings.Join([]string{reqsLine, inputLine, outputLine, cacheLine}, "\n")
 	}
 
 	// Models section (only when hasUsage and models non-empty)
@@ -218,15 +235,16 @@ func (m MetadataPane) View() string {
 	// Combine
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		"\n",
+		sessHeader,
+		sessTitle,
+		sessID,
+		"\n",
 		tagHeader,
 		tagsView,
 		"\n",
 		ideasHeader,
 		ideasView,
 		selectedIdeaSection,
-		"\n",
-		statsHeader,
-		statsView,
 		"\n",
 		usageHeader,
 		usageBody,
