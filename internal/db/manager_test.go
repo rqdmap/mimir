@@ -86,30 +86,6 @@ func TestManagerDB(t *testing.T) {
 		t.Fatalf("note mismatch: got %q", meta.Note)
 	}
 
-	// Idea round-trip
-	ideaID, err := db.AddIdea(mgr, "test idea content", "session-abc")
-	if err != nil {
-		t.Fatalf("add idea: %v", err)
-	}
-	ideas, err := db.ListIdeas(mgr)
-	if err != nil {
-		t.Fatalf("list ideas: %v", err)
-	}
-	found := false
-	for _, idea := range ideas {
-		if idea.ID == ideaID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("added idea not found in list")
-	}
-
-	// Delete
-	if err := db.DeleteIdea(mgr, ideaID); err != nil {
-		t.Fatalf("delete idea: %v", err)
-	}
 	t.Log("manager DB full round-trip PASS")
 }
 
@@ -186,14 +162,6 @@ func TestDeleteTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert session_tag 2: %v", err)
 	}
-	_, err = memDB.Exec(`INSERT INTO idea (id, content, time_created, time_updated) VALUES (?, ?, 0, 0)`, "idea-del-1", "content")
-	if err != nil {
-		t.Fatalf("insert idea: %v", err)
-	}
-	_, err = memDB.Exec(`INSERT INTO idea_tag (idea_id, tag_name) VALUES (?, ?)`, "idea-del-1", "qa-del")
-	if err != nil {
-		t.Fatalf("insert idea_tag: %v", err)
-	}
 
 	if err := db.DeleteTag(memDB, "qa-del"); err != nil {
 		t.Fatalf("DeleteTag: %v", err)
@@ -207,10 +175,6 @@ func TestDeleteTag(t *testing.T) {
 	memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE tag_name = ?`, "qa-del").Scan(&cnt)
 	if cnt != 0 {
 		t.Fatalf("expected session_tag gone, got count=%d", cnt)
-	}
-	memDB.QueryRow(`SELECT COUNT(*) FROM idea_tag WHERE tag_name = ?`, "qa-del").Scan(&cnt)
-	if cnt != 0 {
-		t.Fatalf("expected idea_tag gone, got count=%d", cnt)
 	}
 	t.Log("TestDeleteTag PASS")
 }
@@ -231,14 +195,6 @@ func TestRenameTag(t *testing.T) {
 		if err != nil {
 			t.Fatalf("insert session_tag: %v", err)
 		}
-		_, err = memDB.Exec(`INSERT INTO idea (id, content, time_created, time_updated) VALUES (?, ?, 0, 0)`, "idea-ren-1", "content")
-		if err != nil {
-			t.Fatalf("insert idea: %v", err)
-		}
-		_, err = memDB.Exec(`INSERT INTO idea_tag (idea_id, tag_name) VALUES (?, ?)`, "idea-ren-1", "old-name")
-		if err != nil {
-			t.Fatalf("insert idea_tag: %v", err)
-		}
 
 		if err := db.RenameTag(memDB, "old-name", "new-name"); err != nil {
 			t.Fatalf("RenameTag: %v", err)
@@ -257,10 +213,6 @@ func TestRenameTag(t *testing.T) {
 		memDB.QueryRow(`SELECT COUNT(*) FROM session_tag WHERE tag_name = ? AND session_id = ?`, "new-name", "sess-ren-1").Scan(&cnt)
 		if cnt != 1 {
 			t.Fatalf("session_tag not updated, got count=%d", cnt)
-		}
-		memDB.QueryRow(`SELECT COUNT(*) FROM idea_tag WHERE tag_name = ? AND idea_id = ?`, "new-name", "idea-ren-1").Scan(&cnt)
-		if cnt != 1 {
-			t.Fatalf("idea_tag not updated, got count=%d", cnt)
 		}
 		t.Log("TestRenameTag/happy path PASS")
 	})
@@ -366,35 +318,4 @@ func TestRemoveSessionTagAutoCleanup(t *testing.T) {
 		}
 		t.Log("TestRemoveSessionTagAutoCleanup/multi-session PASS")
 	})
-}
-
-func TestGetIdeasForSession(t *testing.T) {
-	memDB := newInMemoryDB(t)
-
-	// Insert an idea with source_session_id
-	now := int64(1700000000000)
-	_, err := memDB.Exec(`INSERT INTO idea (id, content, source_session_id, time_created, time_updated) VALUES (?, ?, ?, ?, ?)`,
-		"idea-test-1", "test content", "session-xyz", now, now)
-	if err != nil {
-		t.Fatalf("insert idea: %v", err)
-	}
-
-	// Call GetIdeasForSession
-	ideas, err := db.GetIdeasForSession(memDB, "session-xyz")
-	if err != nil {
-		t.Fatalf("GetIdeasForSession: %v", err)
-	}
-	if len(ideas) != 1 {
-		t.Fatalf("expected 1 idea, got %d", len(ideas))
-	}
-	if ideas[0].ID != "idea-test-1" {
-		t.Fatalf("wrong idea ID: %q", ideas[0].ID)
-	}
-	if ideas[0].Content != "test content" {
-		t.Fatalf("wrong content: %q", ideas[0].Content)
-	}
-	if ideas[0].SourceSessionID != "session-xyz" {
-		t.Fatalf("wrong source session: %q", ideas[0].SourceSessionID)
-	}
-	t.Log("TestGetIdeasForSession PASS")
 }

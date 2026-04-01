@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/local/oc-manager/internal/model"
@@ -53,18 +52,6 @@ func runManagerSchema(db *sql.DB) error {
 			session_id TEXT NOT NULL,
 			tag_name   TEXT NOT NULL,
 			PRIMARY KEY (session_id, tag_name)
-		)`,
-		`CREATE TABLE IF NOT EXISTS idea (
-			id                TEXT PRIMARY KEY,
-			content           TEXT NOT NULL,
-			source_session_id TEXT,
-			time_created      INTEGER NOT NULL,
-			time_updated      INTEGER NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS idea_tag (
-			idea_id  TEXT NOT NULL,
-			tag_name TEXT NOT NULL,
-			PRIMARY KEY (idea_id, tag_name)
 		)`,
 		`CREATE TABLE IF NOT EXISTS tag (
 			name  TEXT PRIMARY KEY,
@@ -200,18 +187,13 @@ func RemoveSessionTag(db *sql.DB, sessionID, tag string) error {
 	return tx.Commit()
 }
 
-// DeleteTag removes a tag and all its associations from idea_tag and session_tag.
+// DeleteTag removes a tag and all its session associations.
 func DeleteTag(db *sql.DB, tagName string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-
-	_, err = tx.Exec(`DELETE FROM idea_tag WHERE tag_name = ?`, tagName)
-	if err != nil {
-		return fmt.Errorf("delete idea_tag: %w", err)
-	}
 
 	_, err = tx.Exec(`DELETE FROM session_tag WHERE tag_name = ?`, tagName)
 	if err != nil {
@@ -251,11 +233,6 @@ func RenameTag(db *sql.DB, oldName, newName string) error {
 	_, err = tx.Exec(`UPDATE session_tag SET tag_name = ? WHERE tag_name = ?`, newName, oldName)
 	if err != nil {
 		return fmt.Errorf("update session_tag: %w", err)
-	}
-
-	_, err = tx.Exec(`UPDATE idea_tag SET tag_name = ? WHERE tag_name = ?`, newName, oldName)
-	if err != nil {
-		return fmt.Errorf("update idea_tag: %w", err)
 	}
 
 	_, err = tx.Exec(`DELETE FROM tag WHERE name = ?`, oldName)
@@ -346,154 +323,6 @@ func ListSessionsByTag(db *sql.DB, tag string) ([]string, error) {
 	return sessions, rows.Err()
 }
 
-// AddIdea creates a new idea linked to a session and returns the new idea ID.
-func AddIdea(db *sql.DB, content, sourceSessionID string) (string, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-
-	id := fmt.Sprintf("idea_%d", time.Now().UnixNano())
-	now := time.Now().UnixMilli()
-
-	_, err = tx.Exec(`
-		INSERT INTO idea (id, content, source_session_id, time_created, time_updated)
-		VALUES (?, ?, ?, ?, ?)
-	`, id, content, sourceSessionID, now, now)
-	if err != nil {
-		return "", fmt.Errorf("insert idea: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// ListIdeas returns all ideas ordered by time_created DESC, with their tags.
-func ListIdeas(db *sql.DB) ([]model.Idea, error) {
-	rows, err := db.Query(`
-		SELECT id, content, source_session_id, time_created, time_updated
-		FROM idea
-		ORDER BY time_created DESC
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("query ideas: %w", err)
-	}
-	defer rows.Close()
-
-	var ideas []model.Idea
-	var ideaIDs []string
-	for rows.Next() {
-		var idea model.Idea
-		var sourceID sql.NullString
-		if err := rows.Scan(&idea.ID, &idea.Content, &sourceID, &idea.TimeCreated, &idea.TimeUpdated); err != nil {
-			return nil, fmt.Errorf("scan idea: %w", err)
-		}
-		idea.SourceSessionID = sourceID.String
-		ideas = append(ideas, idea)
-		ideaIDs = append(ideaIDs, idea.ID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	if len(ideaIDs) == 0 {
-		return ideas, nil
-	}
-
-	// Fetch all tags in a single query (avoids N+1).
-	placeholders := strings.Repeat("?,", len(ideaIDs))
-	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
-	args := make([]any, len(ideaIDs))
-	for i, id := range ideaIDs {
-		args[i] = id
-	}
-	tagRows, err := db.Query(
-		"SELECT idea_id, tag_name FROM idea_tag WHERE idea_id IN ("+placeholders+") ORDER BY idea_id, tag_name",
-		args...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query idea_tags: %w", err)
-	}
-	defer tagRows.Close()
-
-	tagMap := make(map[string][]string, len(ideaIDs))
-	for tagRows.Next() {
-		var ideaID, tagName string
-		if err := tagRows.Scan(&ideaID, &tagName); err != nil {
-			return nil, fmt.Errorf("scan idea_tag: %w", err)
-		}
-		tagMap[ideaID] = append(tagMap[ideaID], tagName)
-	}
-	if err := tagRows.Err(); err != nil {
-		return nil, err
-	}
-
-	for i := range ideas {
-		ideas[i].Tags = tagMap[ideas[i].ID]
-	}
-
-	return ideas, nil
-}
-
-func getIdeaTags(db *sql.DB, ideaID string) ([]string, error) {
-	rows, err := db.Query(`SELECT tag_name FROM idea_tag WHERE idea_id = ? ORDER BY tag_name`, ideaID)
-	if err != nil {
-		return nil, fmt.Errorf("query idea_tag: %w", err)
-	}
-	defer rows.Close()
-
-	var tags []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return nil, fmt.Errorf("scan idea tag: %w", err)
-		}
-		tags = append(tags, t)
-	}
-	return tags, rows.Err()
-}
-
-// UpdateIdea updates an idea's content.
-func UpdateIdea(db *sql.DB, id, content string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	now := time.Now().UnixMilli()
-	_, err = tx.Exec(`UPDATE idea SET content = ?, time_updated = ? WHERE id = ?`, content, now, id)
-	if err != nil {
-		return fmt.Errorf("update idea: %w", err)
-	}
-
-	return tx.Commit()
-}
-
-// DeleteIdea deletes an idea and its tags.
-func DeleteIdea(db *sql.DB, id string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	_, err = tx.Exec(`DELETE FROM idea_tag WHERE idea_id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete idea_tag: %w", err)
-	}
-
-	_, err = tx.Exec(`DELETE FROM idea WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete idea: %w", err)
-	}
-
-	return tx.Commit()
-}
-
 // GetSetting retrieves a value from the settings table. Returns "" if not found.
 func GetSetting(d *sql.DB, key string) (string, error) {
 	var value string
@@ -539,29 +368,4 @@ func ListTagsWithSessionCounts(db *sql.DB) ([]model.Tag, map[string]int, error) 
 		counts[name] = n
 	}
 	return tags, counts, rows.Err()
-}
-
-func GetIdeasForSession(db *sql.DB, sessionID string) ([]model.Idea, error) {
-	rows, err := db.Query(`
-		SELECT id, content, source_session_id, time_created, time_updated
-		FROM idea
-		WHERE source_session_id = ?
-		ORDER BY time_created DESC
-	`, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("query ideas for session: %w", err)
-	}
-	defer rows.Close()
-
-	var ideas []model.Idea
-	for rows.Next() {
-		var idea model.Idea
-		var sourceID sql.NullString
-		if err := rows.Scan(&idea.ID, &idea.Content, &sourceID, &idea.TimeCreated, &idea.TimeUpdated); err != nil {
-			return nil, fmt.Errorf("scan idea: %w", err)
-		}
-		idea.SourceSessionID = sourceID.String
-		ideas = append(ideas, idea)
-	}
-	return ideas, rows.Err()
 }
