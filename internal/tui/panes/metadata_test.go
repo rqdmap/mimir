@@ -38,9 +38,6 @@ func TestMetadataPaneWithData(t *testing.T) {
 	if !strings.Contains(view, "work") {
 		t.Errorf("expected tag 'work' in view, got: %s", view)
 	}
-	if !strings.Contains(view, "Session Ideas") {
-		t.Errorf("expected 'Session Ideas' section in view, got: %s", view)
-	}
 	if !strings.Contains(view, "Usage") {
 		t.Errorf("expected Usage section in view, got: %s", view)
 	}

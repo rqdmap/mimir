@@ -49,7 +49,6 @@ type ConversationPane struct {
 	width            int
 	height           int
 	ready            bool
-	ideaMode         bool
 	renderer         *glamour.TermRenderer
 	rendererWidth    int
 	currentSessionID string
@@ -133,17 +132,15 @@ func (c *ConversationPane) SetSize(width, height int) tea.Cmd {
 	return nil
 }
 
-// SetIdeaContent sets idea mode and renders markdown content to the viewport.
+// SetIdeaContent renders markdown content to the viewport.
 func (c *ConversationPane) SetIdeaContent(content string) {
-	c.ideaMode = true
 	rendered := renderMarkdownCached(c.renderer, content)
 	c.viewport.SetContent(rendered)
 	c.viewport.GotoTop()
 }
 
-// ClearIdeaContent clears idea mode and empties the viewport.
+// ClearIdeaContent empties the viewport.
 func (c *ConversationPane) ClearIdeaContent() {
-	c.ideaMode = false
 	c.viewport.SetContent("")
 }
 
@@ -276,9 +273,6 @@ func (c ConversationPane) View() string {
 	}
 
 	titleText := "Conversation"
-	if c.ideaMode {
-		titleText = "Idea"
-	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(borderColor).

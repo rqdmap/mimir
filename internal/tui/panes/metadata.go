@@ -3,14 +3,13 @@ package panes
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/local/oc-manager/internal/model"
 )
 
-// MetadataPane shows session metadata: tags, session ideas, stats
+// MetadataPane shows session metadata: tags, usage stats
 type MetadataPane struct {
 	meta         model.SessionMeta
 	messageCount int
@@ -19,9 +18,6 @@ type MetadataPane struct {
 	height       int
 	hasSession   bool // false = no session selected yet
 	isSubAgent   bool
-	sessionIdeas []model.Idea
-	ideaMode     bool
-	selectedIdea *model.Idea
 	theme        Theme
 	usage        model.SessionUsage
 	hasUsage     bool
@@ -44,20 +40,6 @@ func (m *MetadataPane) SetSessionMeta(meta model.SessionMeta, isSubAgent bool) {
 
 func (m *MetadataPane) SetSessionTitle(title string) {
 	m.sessionTitle = title
-}
-
-func (m *MetadataPane) SetSessionIdeas(ideas []model.Idea) {
-	m.sessionIdeas = ideas
-}
-
-func (m *MetadataPane) SetIdeaMeta(idea model.Idea, sessionTitle string) {
-	m.ideaMode = true
-	m.selectedIdea = &idea
-}
-
-func (m *MetadataPane) ClearIdea() {
-	m.ideaMode = false
-	m.selectedIdea = nil
 }
 
 func (m *MetadataPane) SetMessageCount(n int) {
@@ -117,9 +99,6 @@ func (m MetadataPane) View() string {
 		Height(m.height-2).
 		Padding(0, 1)
 
-	if m.ideaMode && m.selectedIdea != nil && m.selectedIdea.SourceSessionID == "" {
-		return style.Align(lipgloss.Center, lipgloss.Center).Render("No linked session")
-	}
 	if !m.hasSession {
 		return style.Align(lipgloss.Center, lipgloss.Center).Render("Select a session\nto view details.")
 	}
@@ -153,50 +132,10 @@ func (m MetadataPane) View() string {
 		tagsView = lipgloss.NewStyle().Width(m.width - 4).Render(strings.Join(renderedTags, "  "))
 	}
 
-	// Session Ideas
-	ideasHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Session Ideas")
-	var ideasView string
-	if len(m.sessionIdeas) == 0 {
-		ideasView = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("No ideas yet.")
-	} else {
-		var ideaLines []string
-		for _, idea := range m.sessionIdeas {
-			content := idea.Content
-			if len(content) > 40 {
-				content = content[:40] + "..."
-			}
-			ideaLines = append(ideaLines, "• "+content)
-		}
-		ideasView = strings.Join(ideaLines, "\n")
-	}
-
-	// Selected Idea (if in idea mode)
-	var selectedIdeaSection string
-	if m.ideaMode && m.selectedIdea != nil {
-		sidHeader := lipgloss.NewStyle().Bold(true).Foreground(m.theme.TextNormal).Render("Selected Idea")
-		content := m.selectedIdea.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		sidContent := lipgloss.NewStyle().Italic(true).Foreground(m.theme.TextMuted).Render(fmt.Sprintf("%q", content))
-
-		var sourceStr string
-		if m.selectedIdea.SourceSessionID != "" {
-			sourceStr = "Session: " + m.selectedIdea.SourceSessionID[:8] + "..."
-		} else {
-			sourceStr = "(no linked session)"
-		}
-		sidSource := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(sourceStr)
-		sidTime := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(time.UnixMilli(m.selectedIdea.TimeCreated).Format("Jan 02, 2006 15:04"))
-
-		selectedIdeaSection = "\n" + sidHeader + "\n" + sidContent + "\n" + sidSource + "\n" + sidTime
-	}
-
 	// Usage section
 	usageHeader := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render("─── Usage ───")
 	var usageBody string
 	if !m.hasSession {
-		// skip — no session selected
 	} else if !m.hasUsage {
 		usageBody = lipgloss.NewStyle().Foreground(m.theme.TextMuted).Italic(true).Render("Loading...")
 	} else {
@@ -241,10 +180,6 @@ func (m MetadataPane) View() string {
 		"\n",
 		tagHeader,
 		tagsView,
-		"\n",
-		ideasHeader,
-		ideasView,
-		selectedIdeaSection,
 		"\n",
 		usageHeader,
 		usageBody,
