@@ -336,9 +336,9 @@ func (v *StatsView) clampOffsets() {
 
 func (v StatsView) handleKey(msg tea.KeyMsg) (StatsView, tea.Cmd) {
 	switch msg.String() {
-	case "tab":
+	case "]":
 		v.section = (v.section + 1) % statsSectionCount
-	case "shift+tab":
+	case "[":
 		v.section = (v.section - 1 + statsSectionCount) % statsSectionCount
 	case "j", "down":
 		if v.section == statsSectionModel && v.modelCursor < len(v.filteredModels)-1 {

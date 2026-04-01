@@ -984,14 +984,22 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "[":
-		a.activeTab = a.nextTab(-1)
-		a.setFocus(FocusSessionList)
-		return a, a.onTabSwitch()
+		if a.activeTab == TabStats {
+			var cmd tea.Cmd
+			a.statsView, cmd = a.statsView.handleKey(msg)
+			return a, cmd
+		}
+		a.cycleFocusBackward()
+		return a, nil
 
 	case "]":
-		a.activeTab = a.nextTab(1)
-		a.setFocus(FocusSessionList)
-		return a, a.onTabSwitch()
+		if a.activeTab == TabStats {
+			var cmd tea.Cmd
+			a.statsView, cmd = a.statsView.handleKey(msg)
+			return a, cmd
+		}
+		a.cycleFocusForward()
+		return a, nil
 
 	case KeyIdeas:
 		a.activeTab = TabIdeas
@@ -1024,24 +1032,19 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// FocusConversation: fall through to pane delegation below
 
 	case "tab":
+		a.activeTab = a.nextTab(1)
+		a.setFocus(FocusSessionList)
+		return a, a.onTabSwitch()
+
+	case "shift+tab":
+		a.activeTab = a.nextTab(-1)
+		a.setFocus(FocusSessionList)
+		return a, a.onTabSwitch()
+
+	case " ":
 		if a.activeTab == TabIdeas {
 			return a, a.toggleIdeaConvView()
 		}
-		if a.activeTab == TabStats {
-			var cmd tea.Cmd
-			a.statsView, cmd = a.statsView.handleKey(msg)
-			return a, cmd
-		}
-		a.cycleFocusForward()
-		return a, nil
-
-	case "shift+tab":
-		if a.activeTab == TabStats {
-			var cmd tea.Cmd
-			a.statsView, cmd = a.statsView.handleKey(msg)
-			return a, cmd
-		}
-		a.cycleFocusBackward()
 		return a, nil
 	}
 
@@ -1851,8 +1854,8 @@ func (a App) buildStatusBar() string {
 	// Line 2 (global) — always the same
 	line2Parts := []string{
 		hk("jk", "navigate"),
-		hk("[ ]", "tabs"),
-		hk("Tab", "focus"),
+		hk("Tab", "tabs"),
+		hk("[ ]", "pane"),
 		hk("/", "search"),
 		hk("?", "help"),
 		hk("q", "quit"),
@@ -1947,7 +1950,7 @@ func (a App) buildStatusBar() string {
 	hp := func(k, d string) struct{ key, desc string } { return struct{ key, desc string }{k, d} }
 	switch a.activeTab {
 	case TabStats:
-		hints = append(hints, hp("Tab", "section"), hp("s", "sort"))
+		hints = append(hints, hp("[ ]", "section"), hp("s", "sort"))
 		if a.statsView.section == statsSectionChart {
 			hints = append(hints, hp("h/l", "cursor"), hp("0/$", "first/last"))
 		} else {
@@ -1962,7 +1965,7 @@ func (a App) buildStatusBar() string {
 				if a.ideaShowConv {
 					ideaDesc = "show idea"
 				}
-				hints = append(hints, hp("Enter", "open"), hp("e", "edit"), hp("E", "$EDITOR"), hp("d", "delete"), hp("Tab", ideaDesc), hp("r", "refresh"))
+				hints = append(hints, hp("Enter", "open"), hp("e", "edit"), hp("E", "$EDITOR"), hp("d", "delete"), hp("Space", ideaDesc), hp("r", "refresh"))
 			case TabTags:
 				hints = append(hints, hp("Enter", "view sessions"), hp("d", "delete"), hp("r", "rename"))
 			default:
@@ -2014,10 +2017,10 @@ func truncateStyledHints(hints []struct{ key, desc string }, maxWidth int, hk fu
 func (a App) overlayHelp(background string) string {
 	helpText := `Keybindings
 
-  [Tab / Shift+Tab]  Cycle pane focus
+  [Tab / Shift+Tab]  Cycle tabs (Ideas / Sessions / Tags / Stats)
   [r]               Refresh sessions
   [/]               Search sessions (title only)
-  [[] / []]         Cycle tabs (Ideas / Sessions / Tags)
+  [[] / []]         Cycle pane focus within tab
   [T]               Switch to Tags tab
   [A]               Toggle sub-agent sessions
   [?]               Toggle this help
@@ -2041,6 +2044,7 @@ func (a App) overlayHelp(background string) string {
   [Esc / Enter]     Exit search
 
   In Ideas Tab:
+  [Space]           Toggle idea body / linked session conversation
   [Enter]           Focus conversation pane
   [e]               Edit idea
   [d]               Delete idea (confirm y/n)
@@ -2048,7 +2052,10 @@ func (a App) overlayHelp(background string) string {
   In Tags Tab:
   [Enter]           View sessions with tag
   [d]               Delete tag
-  [r]               Rename tag`
+  [r]               Rename tag
+
+  In Stats Tab:
+  [[] / []]         Cycle sections (Chart / By Model / By Agent)`
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -2079,8 +2086,8 @@ func (a App) overlayWelcome(background string) string {
 	entries := []entry{
 		{[]string{"j", "k"}, "Navigate list"},
 		{[]string{"Enter"}, "Open session"},
-		{[]string{"[", "]"}, "Switch tabs"},
-		{[]string{"Tab"}, "Cycle pane focus"},
+		{[]string{"Tab", "Shift+Tab"}, "Switch tabs"},
+		{[]string{"[", "]"}, "Cycle pane focus"},
 		{[]string{"/"}, "Search"},
 		{[]string{"?"}, "Full keybinding help"},
 		{[]string{"q"}, "Quit"},
