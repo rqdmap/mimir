@@ -149,6 +149,7 @@ func (v *StatsView) applyFilter() {
 		v.agentOffset = 0
 	}
 	v.resortModelStats()
+	v.resortAgentStats()
 }
 
 func (v *StatsView) filteredDailyPoints(q string) []model.DailyPoint {
@@ -434,11 +435,11 @@ func (v StatsView) renderSummary(mutedStyle, accentStyle, normalStyle lipgloss.S
 	}
 
 	parts := []string{
-		normalStyle.Render("Sess ") + accentStyle.Render(fmt.Sprintf("%d", v.totalSessions)),
+		normalStyle.Render("Sessions ") + accentStyle.Render(fmt.Sprintf("%d", v.totalSessions)),
 		normalStyle.Render("Requests ") + accentStyle.Render(fmt.Sprintf("%d", v.userRequests)) +
 			mutedStyle.Render(fmt.Sprintf(" (Human %d  SubAgent %d)", v.humanRequests, v.userRequests-v.humanRequests)),
-		normalStyle.Render("In ") + accentStyle.Render(formatTokens(total)),
-		normalStyle.Render("Out ") + accentStyle.Render(formatTokens(output)),
+		normalStyle.Render("Input ") + accentStyle.Render(formatTokens(total)),
+		normalStyle.Render("Output ") + accentStyle.Render(formatTokens(output)),
 		normalStyle.Render("Cache ") + accentStyle.Render(fmt.Sprintf("%.0f%%", cachePercent)),
 	}
 	if topModel != "" {
@@ -602,7 +603,7 @@ func (v StatsView) View() string {
 			humanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("73")).Bold(true)
 			subagentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
 
-			title = reqsStyle.Render("── Reqs ──")
+			title = reqsStyle.Render("── Requests ──")
 			title += "  " + humanStyle.Render("●") + mutedStyle.Render(" Human")
 			title += "  " + subagentStyle.Render("●") + mutedStyle.Render(" SubAgent")
 			if cursorDate != "" {
@@ -631,8 +632,8 @@ func (v StatsView) View() string {
 				return ""
 			}
 
-			colSess := 6
-			colTurns := 7
+			colSess := 9
+			colTurns := 9
 			colInput := 10
 			colOutput := 10
 			colCache := 8
@@ -650,8 +651,8 @@ func (v StatsView) View() string {
 			hInput := fmt.Sprintf("%*s%s", colInput-len(sortIndicator(0)), "Input", sortIndicator(0))
 			hOutput := fmt.Sprintf("%*s%s", colOutput-len(sortIndicator(1)), "Output", sortIndicator(1))
 			hCache := fmt.Sprintf("%*s%s", colCache-len(sortIndicator(2)), "Cache%", sortIndicator(2))
-			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Reqs", sortIndicator(3))
-			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sess", sortIndicator(4))
+			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Requests", sortIndicator(3))
+			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sessions", sortIndicator(4))
 
 			headerLine := hModel + "  " + hProvider + "  " + hInput + "  " + hOutput + "  " + hCache + "  " + hTurns + "  " + hSess
 			sb.WriteString(headerStyle.Render(headerLine))
@@ -707,8 +708,8 @@ func (v StatsView) View() string {
 				return ""
 			}
 
-			colSess := 6
-			colTurns := 7
+			colSess := 9
+			colTurns := 9
 			colInput := 10
 			colOutput := 10
 			colCache := 8
@@ -724,8 +725,8 @@ func (v StatsView) View() string {
 			hInput := fmt.Sprintf("%*s%s", colInput-len(sortIndicator(0)), "Input", sortIndicator(0))
 			hOutput := fmt.Sprintf("%*s%s", colOutput-len(sortIndicator(1)), "Output", sortIndicator(1))
 			hCache := fmt.Sprintf("%*s%s", colCache-len(sortIndicator(2)), "Cache%", sortIndicator(2))
-			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Reqs", sortIndicator(3))
-			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sess", sortIndicator(4))
+			hTurns := fmt.Sprintf("%*s%s", colTurns-len(sortIndicator(3)), "Requests", sortIndicator(3))
+			hSess := fmt.Sprintf("%*s%s", colSess-len(sortIndicator(4)), "Sessions", sortIndicator(4))
 
 			headerLine := hAgent + "  " + hInput + "  " + hOutput + "  " + hCache + "  " + hTurns + "  " + hSess
 			sb.WriteString(headerStyle.Render(headerLine))
