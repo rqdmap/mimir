@@ -13,16 +13,9 @@ type InputTarget int
 
 const (
 	InputTargetNone InputTarget = iota
-	InputTargetIdea
 	InputTargetTag
 	InputTargetTagRename
 )
-
-type InputSavedIdeaMsg struct {
-	IdeaID    string
-	SessionID string
-	Content   string
-}
 
 type InputTagsUpdatedMsg struct {
 	SessionID  string
@@ -39,7 +32,6 @@ type InputRenamedTagMsg struct {
 
 type InputMode struct {
 	target       InputTarget
-	ideaID       string
 	sessionID    string
 	sessionTitle string
 
@@ -69,39 +61,9 @@ func NewInputMode(width, height int, theme panes.Theme) InputMode {
 	}
 }
 
-func (im *InputMode) ActivateIdea(sessionID, sessionTitle string) {
-	im.target = InputTargetIdea
-	im.ideaID = ""
-	im.sessionID = sessionID
-	im.sessionTitle = sessionTitle
-	im.active = true
-
-	ti := textinput.New()
-	ti.Placeholder = "Capture idea..."
-	ti.Width = 56
-	ti.Focus()
-	im.textinput = ti
-}
-
-func (im *InputMode) ActivateIdeaEdit(ideaID, content string) {
-	im.target = InputTargetIdea
-	im.ideaID = ideaID
-	im.sessionID = ""
-	im.active = true
-
-	ti := textinput.New()
-	ti.Placeholder = "Edit idea..."
-	ti.Width = 56
-	ti.SetValue(content)
-	ti.CursorEnd()
-	ti.Focus()
-	im.textinput = ti
-}
-
 func (im *InputMode) ActivateRename(tagName string) {
 	im.target = InputTargetTagRename
 	im.sessionID = tagName
-	im.ideaID = ""
 	im.sessionTitle = ""
 	im.active = true
 
@@ -116,7 +78,6 @@ func (im *InputMode) ActivateRename(tagName string) {
 
 func (im *InputMode) ActivateTag(sessionID, sessionTitle string, existingTags []string) {
 	im.target = InputTargetTag
-	im.ideaID = ""
 	im.sessionID = sessionID
 	im.sessionTitle = sessionTitle
 	im.active = true
@@ -142,7 +103,6 @@ func (im InputMode) IsActive() bool {
 func (im *InputMode) Deactivate() {
 	im.active = false
 	im.target = InputTargetNone
-	im.ideaID = ""
 	im.sessionID = ""
 	im.sessionTitle = ""
 	im.workingTags = nil
@@ -163,25 +123,6 @@ func (im InputMode) Update(msg tea.Msg) (InputMode, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch im.target {
-		case InputTargetIdea:
-			switch msg.String() {
-			case "enter":
-				content := im.textinput.Value()
-				ideaID := im.ideaID
-				sessionID := im.sessionID
-				im.Deactivate()
-				return im, func() tea.Msg {
-					return InputSavedIdeaMsg{IdeaID: ideaID, SessionID: sessionID, Content: content}
-				}
-			case "esc":
-				im.Deactivate()
-				return im, func() tea.Msg { return InputCancelledMsg{} }
-			default:
-				var cmd tea.Cmd
-				im.textinput, cmd = im.textinput.Update(msg)
-				return im, cmd
-			}
-
 		case InputTargetTag:
 			key := msg.String()
 			switch key {
@@ -347,29 +288,6 @@ func (im InputMode) View() string {
 	var content string
 
 	switch im.target {
-	case InputTargetIdea:
-		var title, prompt string
-		if im.ideaID != "" {
-			title = titleStyle.Render("Edit Idea")
-			prompt = labelStyle.Render("Edit idea content:")
-		} else if im.sessionID != "" {
-			title = titleStyle.Render("Capture Idea")
-			sessionLabel := lipgloss.NewStyle().Foreground(im.theme.BorderFocused).Bold(true).Render(im.sessionTitle)
-			prompt = labelStyle.Render("Linked to: ") + sessionLabel
-		} else {
-			title = titleStyle.Render("Capture Idea")
-			prompt = labelStyle.Render("Standalone idea (no session link):")
-		}
-		hint := hintStyle.Render("[Enter] save  [Esc] cancel")
-		content = lipgloss.JoinVertical(lipgloss.Left,
-			title,
-			"",
-			prompt,
-			im.textinput.View(),
-			"",
-			hint,
-		)
-
 	case InputTargetTag:
 		title := titleStyle.Render("Add Tags")
 		sessionLabel := lipgloss.NewStyle().Foreground(im.theme.BorderFocused).Bold(true).Render(im.sessionTitle)
