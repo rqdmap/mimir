@@ -326,12 +326,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.totalCount = msg.totalCount
 		a.applyFilters()
 		a.err = ""
+		if a.autoPreview && a.selectedSession == nil {
+			if autoCmd := a.tryAutoLoadSelected(); autoCmd != nil {
+				cmds = append(cmds, autoCmd)
+			}
+		}
 		if msg.done {
 			a.loading = false
 			a.sessionList.SetLoading(false)
-			return a, nil
+			return a, tea.Batch(cmds...)
 		}
-		return a, a.loadNextBatch(msg.loadedCount, msg.totalCount)
+		cmds = append(cmds, a.loadNextBatch(msg.loadedCount, msg.totalCount))
+		return a, tea.Batch(cmds...)
 
 	case sessionsRefreshedMsg:
 		a.sessions = msg.sessions
