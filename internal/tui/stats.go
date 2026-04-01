@@ -214,7 +214,7 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 		chartWidth = 10
 	}
 
-	available := v.height - 11
+	available := v.height - 16
 	eachH := available / 3
 	if eachH < 4 {
 		eachH = 4
@@ -234,8 +234,8 @@ func (v *StatsView) buildCharts(daily []model.DailyPoint) {
 
 	v.chartTokens.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("33")))
 	v.chartCachePct.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("10")))
-	v.chartReqs.SetDataSetStyle("human", lipgloss.NewStyle().Foreground(lipgloss.Color("73")))
-	v.chartReqs.SetDataSetStyle("subagent", lipgloss.NewStyle().Foreground(lipgloss.Color("141")))
+	v.chartReqs.SetDataSetStyle("human", lipgloss.NewStyle().Foreground(lipgloss.Color("#D8A657")))
+	v.chartReqs.SetDataSetStyle("subagent", lipgloss.NewStyle().Foreground(lipgloss.Color("#D3869B")))
 
 	for _, dp := range points {
 		t := dp.Date
@@ -555,6 +555,17 @@ func (v StatsView) View() string {
 
 			colHighlight := lipgloss.NewStyle().Background(v.theme.AccentBg)
 
+			// SetColumnBackgroundStyle maps ts.Unix() via:
+			//   scaledX = (ts.Unix() - ViewMinX) * GraphWidth / (ViewMaxX - ViewMinX)
+			// When the cursor is at the last data point, ts.Unix() == ViewMaxX and
+			// scaledX == GraphWidth, which is one column past the last visible cell —
+			// so the highlight is silently dropped. Subtracting 1s keeps the value
+			// strictly less than ViewMaxX and maps it to the last valid column.
+			highlightDate := v.sortedPoints[v.chartCursor].Date
+			if v.chartCursor == len(v.sortedPoints)-1 {
+				highlightDate = highlightDate.Add(-time.Second)
+			}
+
 			var cursorDate, cursorTokens, cursorOut, cursorCachePct, cursorReqs string
 			var cursorHuman, cursorSubAgent int
 			if len(v.sortedPoints) > 0 && v.chartCursor >= 0 && v.chartCursor < len(v.sortedPoints) {
@@ -573,6 +584,7 @@ func (v StatsView) View() string {
 				cursorCachePct = fmt.Sprintf("%.0f%%", cachePct)
 			}
 
+			sb.WriteString("\n")
 			title := tokensStyle.Render("── Input ──")
 			if cursorDate != "" {
 				title += mutedStyle.Render("  "+cursorDate+": ") + tokensStyle.Render(cursorTokens)
@@ -582,11 +594,12 @@ func (v StatsView) View() string {
 			sb.WriteString("\n")
 			v.chartTokens.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartTokens.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartTokens.SetColumnBackgroundStyle(highlightDate, colHighlight)
 			}
 			sb.WriteString(v.chartTokens.View())
 			sb.WriteString("\n")
 
+			sb.WriteString("\n")
 			title = cachePctStyle.Render("── Cache% ──")
 			if cursorDate != "" {
 				title += mutedStyle.Render("  "+cursorDate+": ") + cachePctStyle.Render(cursorCachePct)
@@ -595,26 +608,29 @@ func (v StatsView) View() string {
 			sb.WriteString("\n")
 			v.chartCachePct.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartCachePct.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartCachePct.SetColumnBackgroundStyle(highlightDate, colHighlight)
 			}
 			sb.WriteString(v.chartCachePct.View())
 			sb.WriteString("\n")
 
-			humanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("73")).Bold(true)
-			subagentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
+			sb.WriteString("\n")
+			humanStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D8A657")).Bold(true)
+			subagentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#D3869B")).Bold(true)
 
 			title = reqsStyle.Render("── Requests ──")
 			title += "  " + humanStyle.Render("●") + mutedStyle.Render(" Human")
 			title += "  " + subagentStyle.Render("●") + mutedStyle.Render(" SubAgent")
 			if cursorDate != "" {
 				title += mutedStyle.Render("  "+cursorDate+": ") + reqsStyle.Render(cursorReqs)
-				title += mutedStyle.Render(fmt.Sprintf("  (Human %d  SubAgent %d)", cursorHuman, cursorSubAgent))
+				title += mutedStyle.Render("  (Human ") + humanStyle.Render(fmt.Sprintf("%d", cursorHuman)) +
+					mutedStyle.Render("  SubAgent ") + subagentStyle.Render(fmt.Sprintf("%d", cursorSubAgent)) +
+					mutedStyle.Render(")")
 			}
 			sb.WriteString(title)
 			sb.WriteString("\n")
 			v.chartReqs.DrawBrailleAll()
 			if len(v.sortedPoints) > 0 {
-				v.chartReqs.SetColumnBackgroundStyle(v.sortedPoints[v.chartCursor].Date, colHighlight)
+				v.chartReqs.SetColumnBackgroundStyle(highlightDate, colHighlight)
 			}
 			sb.WriteString(v.chartReqs.View())
 		}
