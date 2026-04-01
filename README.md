@@ -18,12 +18,11 @@ A terminal UI for browsing and managing [OpenCode](https://opencode.ai) sessions
 
 ## Features
 
-- **Four-tab interface** — Sessions, Ideas, Tags, and Stats tabs with `Tab` / `Shift+Tab` cycling
+- **Three-tab interface** — Sessions, Tags, and Stats tabs with `Tab` / `Shift+Tab` cycling
 - **Session browser** — browse all OpenCode sessions with live search, tag filtering, and sub-agent toggle
 - **Conversation viewer** — read full AI conversations with glamour-rendered markdown, tool call & subtask display, and vim-style `/` search with `n`/`N` navigation
-- **Metadata pane** — view session tags, linked ideas, message stats, and per-session token usage at a glance
+- **Metadata pane** — view session tags, message stats, and per-session token usage at a glance
 - **Stats dashboard** — token usage analytics with by-model and by-agent breakdowns, daily usage braille line charts, and per-session cost in the metadata pane; switch time periods with `1`/`7`/`3`/`0`
-- **Idea notebook** — capture ideas linked to sessions; idea body rendered in the conversation pane, `Space` toggles between idea content and linked session conversation; `E` opens idea in `$EDITOR`
 - **Tag management** — create, rename, delete tags; filter sessions by tag; manage tag-session associations
 - **Markdown export** — export any session as `.md` with selectable content (messages, metadata, tool calls, reasoning)
 - **Trilium export** — export sessions directly to [Trilium Notes](https://github.com/TriliumNext/Notes) via ETAPI; renders with full Markdown formatting (headings, code blocks, tables); upserts by title so re-exporting updates in place
@@ -64,7 +63,7 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
   "export_dir": "~/mimir-exports",
   "layout": {
     "ratio": [1, 4, 1],
-    "tab_order": ["sessions", "ideas", "tags", "stats"]
+    "tab_order": ["sessions", "tags", "stats"]
   }
 }
 ```
@@ -75,7 +74,7 @@ Mimir reads its config from `~/.config/mimir/config.json` (or `$XDG_CONFIG_HOME/
 | `theme` | `"gruvbox"` | Color theme — `"gruvbox"` or `"default"` |
 | `export_dir` | `"~/mimir-exports"` | Directory for exported markdown files (prompts to create if it doesn't exist) |
 | `layout.ratio` | `[1, 4, 1]` | Three-pane width ratio (left : center : right), integers |
-| `layout.tab_order` | `["sessions", "ideas", "tags", "stats"]` | Tab display order |
+| `layout.tab_order` | `["sessions", "tags", "stats"]` | Tab display order |
 
 The theme can also be overridden with the `MIMIR_THEME` environment variable.
 
@@ -105,15 +104,13 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Cycle tabs (Sessions / Ideas / Tags / Stats) |
+| `Tab` / `Shift+Tab` | Cycle tabs (Sessions / Tags / Stats) |
 | `[` / `]` | Cycle pane focus within current tab |
-| `I` | Jump to Ideas tab |
 | `T` | Jump to Tags tab |
 | `S` | Jump to Stats tab |
 | `A` | Toggle sub-agent session visibility |
 | `/` | Search within current tab or conversation |
 | `r` | Refresh current tab |
-| `i` | Capture a new idea (linked to selected session if on Sessions tab) |
 | `Ctrl+E` | Export selected session (Local Markdown or Trilium Notes) |
 | `?` | Show help overlay |
 | `q` / `Ctrl+C` | Quit |
@@ -139,17 +136,6 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 | `n` / `N` | Next / previous search match |
 | `Esc` / `Enter` | Exit search mode |
 
-### Ideas Tab
-
-| Key | Action |
-|-----|--------|
-| `↑` `↓` / `j` `k` | Navigate ideas |
-| `Space` | Toggle between idea body and linked session conversation |
-| `Enter` | Jump to linked session (switches to Sessions tab) |
-| `e` | Edit idea inline |
-| `E` | Open idea in `$VISUAL` / `$EDITOR` |
-| `d` | Delete idea (with confirmation) |
-
 ### Tags Tab
 
 | Key | Action |
@@ -173,7 +159,7 @@ To get your ETAPI token: in Trilium go to **Menu → Options → ETAPI** and cre
 
 Mimir reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) in **read-only** mode — it never writes to OpenCode's data.
 
-It also maintains its own manager database alongside it for user-created metadata: tags, ideas, and session associations. Sessions are loaded progressively in batches of 100 so the UI stays responsive from the first keypress.
+It also maintains its own manager database alongside it for user-created metadata: tags and session associations. Sessions are loaded progressively in batches of 100 so the UI stays responsive from the first keypress.
 
 For Trilium exports, session content is converted from Markdown to HTML via `goldmark` before upload — Trilium's `text` note type is an HTML editor, so this ensures headings, bold, code blocks, and tables all render correctly.
 
