@@ -85,7 +85,8 @@ func newInMemoryOpencodeDB(t *testing.T) *sql.DB {
 	}
 	_, err = d.Exec(`CREATE TABLE session (
 		id TEXT PRIMARY KEY,
-		parent_id TEXT
+		parent_id TEXT,
+		time_created INTEGER NOT NULL DEFAULT 0
 	)`)
 	if err != nil {
 		t.Fatalf("create session table: %v", err)
@@ -93,9 +94,21 @@ func newInMemoryOpencodeDB(t *testing.T) *sql.DB {
 	return d
 }
 
+func insertSession(t *testing.T, d *sql.DB, id string, parentID *string, timeCreated int64) {
+	t.Helper()
+	_, err := d.Exec(`INSERT OR REPLACE INTO session (id, parent_id, time_created) VALUES (?, ?, ?)`, id, parentID, timeCreated)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+}
+
 // insertMessage is a test helper to insert a message with given data.
 func insertMessage(t *testing.T, d *sql.DB, id, sessionID string, data map[string]interface{}) {
 	t.Helper()
+	_, err := d.Exec(`INSERT OR IGNORE INTO session (id, parent_id, time_created) VALUES (?, NULL, 0)`, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		t.Fatalf("marshal json: %v", err)
@@ -532,5 +545,157 @@ func TestGetSessionUsage(t *testing.T) {
 	}
 	if su.Models[0] != "claude-sonnet-4-5" {
 		t.Errorf("expected first model claude-sonnet-4-5, got %s", su.Models[0])
+	}
+}
+
+func TestStatsDedupForkDuplicates(t *testing.T) {
+	d := newInMemoryOpencodeDB(t)
+	defer d.Close()
+
+	insertSession(t, d, "session-1", nil, 100)
+	parent := "session-1"
+	insertSession(t, d, "session-2", &parent, 200)
+
+	insertMessage(t, d, "user1-original", "session-1", map[string]interface{}{
+		"role": "user",
+		"time": map[string]interface{}{"created": int64(1000)},
+	})
+	insertMessage(t, d, "ai1-original", "session-1", map[string]interface{}{
+		"role":       "assistant",
+		"modelID":    "claude-sonnet-4-5",
+		"providerID": "anthropic",
+		"agent":      "build",
+		"tokens": map[string]interface{}{
+			"input":  100,
+			"output": 20,
+		},
+		"time": map[string]interface{}{"created": int64(1100)},
+	})
+
+	insertMessage(t, d, "user1-fork", "session-2", map[string]interface{}{
+		"role": "user",
+		"time": map[string]interface{}{"created": int64(1000)},
+	})
+	insertMessage(t, d, "ai1-fork", "session-2", map[string]interface{}{
+		"role":       "assistant",
+		"modelID":    "claude-sonnet-4-5",
+		"providerID": "anthropic",
+		"agent":      "build",
+		"tokens": map[string]interface{}{
+			"input":  100,
+			"output": 20,
+		},
+		"time": map[string]interface{}{"created": int64(1100)},
+	})
+
+	insertMessage(t, d, "user2-fork-only", "session-2", map[string]interface{}{
+		"role": "user",
+		"time": map[string]interface{}{"created": int64(2000)},
+	})
+	insertMessage(t, d, "ai2-fork-only", "session-2", map[string]interface{}{
+		"role":       "assistant",
+		"modelID":    "claude-sonnet-4-5",
+		"providerID": "anthropic",
+		"agent":      "build",
+		"tokens": map[string]interface{}{
+			"input":  50,
+			"output": 10,
+		},
+		"time": map[string]interface{}{"created": int64(2100)},
+	})
+
+	models, err := db.GetUsageByModel(d, 0)
+	if err != nil {
+		t.Fatalf("GetUsageByModel: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model stat, got %d", len(models))
+	}
+	if models[0].Turns != 2 {
+		t.Fatalf("expected 2 assistant turns after dedup, got %d", models[0].Turns)
+	}
+	if models[0].InputTokens != 150 {
+		t.Fatalf("expected 150 input tokens after dedup, got %d", models[0].InputTokens)
+	}
+	if models[0].UserRequests != 2 {
+		t.Fatalf("expected 2 user requests after dedup, got %d", models[0].UserRequests)
+	}
+	if models[0].HumanRequests != 1 {
+		t.Fatalf("expected 1 human request after dedup, got %d", models[0].HumanRequests)
+	}
+
+	agents, err := db.GetUsageByAgent(d, 0)
+	if err != nil {
+		t.Fatalf("GetUsageByAgent: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Turns != 2 || agents[0].UserRequests != 2 {
+		t.Fatalf("expected deduped agent stats, got %+v", agents)
+	}
+
+	daily, err := db.GetDailyUsage(d, 0)
+	if err != nil {
+		t.Fatalf("GetDailyUsage: %v", err)
+	}
+	if len(daily) != 1 {
+		t.Fatalf("expected 1 daily point, got %d", len(daily))
+	}
+	if daily[0].Turns != 2 || daily[0].UserRequests != 2 || daily[0].HumanRequests != 1 {
+		t.Fatalf("expected deduped daily stats, got %+v", daily[0])
+	}
+
+	providerDaily, err := db.GetDailyUserRequestsByProvider(d, 0)
+	if err != nil {
+		t.Fatalf("GetDailyUserRequestsByProvider: %v", err)
+	}
+	if len(providerDaily) != 1 || providerDaily[0].UserRequests != 2 || providerDaily[0].HumanRequests != 1 {
+		t.Fatalf("expected deduped provider daily stats, got %+v", providerDaily)
+	}
+
+	modelDaily, err := db.GetDailyUsageByModel(d, 0)
+	if err != nil {
+		t.Fatalf("GetDailyUsageByModel: %v", err)
+	}
+	if len(modelDaily) != 1 || modelDaily[0].Turns != 2 || modelDaily[0].InputTokens != 150 {
+		t.Fatalf("expected deduped model daily stats, got %+v", modelDaily)
+	}
+
+	sessions, err := db.GetDistinctSessionCount(d, 0)
+	if err != nil {
+		t.Fatalf("GetDistinctSessionCount: %v", err)
+	}
+	if sessions != 2 {
+		t.Fatalf("expected 2 distinct sessions with deduped assistant messages, got %d", sessions)
+	}
+
+	userRequests, err := db.GetUserRequestCount(d, 0)
+	if err != nil {
+		t.Fatalf("GetUserRequestCount: %v", err)
+	}
+	if userRequests != 2 {
+		t.Fatalf("expected 2 deduped user requests, got %d", userRequests)
+	}
+
+	humanRequests, err := db.GetHumanRequestCount(d, 0)
+	if err != nil {
+		t.Fatalf("GetHumanRequestCount: %v", err)
+	}
+	if humanRequests != 1 {
+		t.Fatalf("expected 1 deduped human request, got %d", humanRequests)
+	}
+
+	session1Usage, err := db.GetSessionUsage(d, "session-1")
+	if err != nil {
+		t.Fatalf("GetSessionUsage session-1: %v", err)
+	}
+	if session1Usage.UserTurns != 1 || session1Usage.AITurns != 1 || session1Usage.InputTokens != 100 {
+		t.Fatalf("expected original session usage unchanged, got %+v", session1Usage)
+	}
+
+	session2Usage, err := db.GetSessionUsage(d, "session-2")
+	if err != nil {
+		t.Fatalf("GetSessionUsage session-2: %v", err)
+	}
+	if session2Usage.UserTurns != 1 || session2Usage.AITurns != 1 || session2Usage.InputTokens != 50 {
+		t.Fatalf("expected fork session usage to exclude duplicates, got %+v", session2Usage)
 	}
 }
